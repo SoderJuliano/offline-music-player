@@ -1,0 +1,12 @@
+{
+  "appTitle": "Offline Music Player",
+  "appDescription": "Add songs from your computer and they will be saved for your next visit.",
+  "addSongs": "+ Add Songs",
+  "clearPlaylist": "Clear Playlist",
+  "nowPlaying": "Now Playing:",
+  "playlist": "Playlist",
+  "emptyPlaylist": "Your playlist is empty. Add some songs to get started.",
+  "unknownArtist": "Unknown Artist",
+  "confirmClearAll": "Are you sure you want to clear the entire playlist?",
+  "confirmDeleteSong": "Are you sure you want to delete {songName}?"
+}
