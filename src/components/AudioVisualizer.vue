@@ -29,6 +29,14 @@ onMounted(() => {
   initVisualizer()
   // Listen for page visibility changes
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  
+  // If already playing when component mounts, start visualization
+  if (props.isPlaying && props.audioElement) {
+    console.log('Component mounted with music already playing, starting visualization')
+    setTimeout(() => {
+      startVisualization()
+    }, 200)
+  }
 })
 
 onUnmounted(() => {
@@ -36,15 +44,17 @@ onUnmounted(() => {
   cleanup()
 })
 
-watch(() => props.isPlaying, (isPlaying) => {
+watch(() => props.isPlaying, (isPlaying, oldValue) => {
+  console.log('isPlaying changed from', oldValue, 'to:', isPlaying)
   if (isPlaying) {
     startVisualization()
   } else {
     stopVisualization()
   }
-})
+}, { immediate: true })
 
 watch(() => props.audioElement, (newAudio) => {
+  console.log('audioElement changed:', !!newAudio)
   if (newAudio) {
     setupAudioContext(newAudio)
   }
@@ -56,8 +66,10 @@ function initVisualizer() {
   const ctx = canvas.value.getContext('2d')
   if (!ctx) return
 
-  // Set canvas size
-  resizeCanvas()
+  // Set canvas size with a small delay to ensure container is rendered
+  setTimeout(() => {
+    resizeCanvas()
+  }, 100)
   
   // Listen for resize events
   window.addEventListener('resize', resizeCanvas)
@@ -74,17 +86,27 @@ function resizeCanvas() {
   const container = canvas.value.parentElement
   if (!container) return
   
-  canvas.value.width = container.clientWidth
-  canvas.value.height = container.clientHeight
+  // Force a minimum size
+  const width = Math.max(container.clientWidth, 300)
+  const height = Math.max(container.clientHeight, 150)
+  
+  canvas.value.width = width
+  canvas.value.height = height
+  
+  console.log('Canvas resized to:', width, 'x', height)
 }
 
 function setupAudioContext(audioElement: HTMLAudioElement) {
   try {
+    console.log('Setting up audio context...')
+    
     if (!audioContext) {
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      console.log('Audio context created')
     }
 
     if (!source) {
+      console.log('Creating media source...')
       source = audioContext.createMediaElementSource(audioElement)
       analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
@@ -94,21 +116,32 @@ function setupAudioContext(audioElement: HTMLAudioElement) {
       
       source.connect(analyser)
       analyser.connect(audioContext.destination)
+      console.log('Audio context setup complete')
     }
   } catch (error) {
-    console.error('Error setting up audio context. Visualization will be disabled.', error)
+    console.error('Error setting up audio context:', error)
+    // If source already exists, that's okay - audio will still play
   }
 }
 
 function startVisualization() {
+  console.log('startVisualization called', {
+    hasAudioContext: !!audioContext,
+    isPlaying: props.isPlaying,
+    contextState: audioContext?.state
+  })
+  
   if (!audioContext || !props.isPlaying) return
 
   // Resume context if it was suspended by the browser
   if (audioContext.state === 'suspended') {
+    console.log('Resuming suspended audio context...')
     audioContext.resume().then(() => {
+      console.log('Audio context resumed, starting draw')
       draw()
     })
   } else {
+    console.log('Starting draw immediately')
     draw()
   }
 }
@@ -121,7 +154,15 @@ function stopVisualization() {
 }
 
 function draw() {
-  if (!canvas.value || !analyser || !dataArray || !props.isPlaying) return
+  if (!canvas.value || !analyser || !dataArray || !props.isPlaying) {
+    console.log('Draw stopped - missing:', {
+      canvas: !!canvas.value,
+      analyser: !!analyser,
+      dataArray: !!dataArray,
+      isPlaying: props.isPlaying
+    })
+    return
+  }
   
   const ctx = canvas.value.getContext('2d')
   if (!ctx) return

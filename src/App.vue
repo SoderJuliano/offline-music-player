@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, computed, nextTick, defineAsyncComponent, h } from 'vue';
 import { dbService, type Playlist, type Song } from './services/db';
-import AudioVisualizer from './components/AudioVisualizer.vue';
+
+// Lazy load AudioVisualizer only when needed
+const AudioVisualizer = defineAsyncComponent({
+  loader: () => import('./components/AudioVisualizer.vue'),
+  errorComponent: { render: () => h('div') },
+  delay: 200,
+  timeout: 3000,
+});
 
 // --- Interfaces ---
-interface PlaylistWithSongs extends Playlist {
+interface PlaylistWithSongs {
+  id: number;
+  name: string;
   songs: Song[];
 }
 
@@ -27,7 +36,15 @@ const editingPlaylistName = ref('');
 
 // State for hiding song info on small screens
 const hideSongInfo = ref(false);
+const isHeaderCollapsed = ref(false); // Manual toggle state
 let songInfoHideTimer: number | null = null;
+let touchStartY = 0;
+let touchStartTime = 0;
+let isScrolling = false;
+
+// Reactive window dimensions
+const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024);
+const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 768);
 
 // --- Computed Properties ---
 const activeSongs = computed(() => {
@@ -44,45 +61,95 @@ const currentSong = computed(() => {
 
 // Check if screen is small (like iPhone 13, iPhone SE)
 const isSmallScreen = computed(() => {
-  return window.innerHeight <= 750 && window.innerWidth <= 450;
+  return windowHeight.value <= 750 && windowWidth.value <= 450;
 });
 
 // Check if is desktop (large screen)
 const isDesktop = computed(() => {
-  return window.innerWidth > 768;
+  return windowWidth.value > 768;
 });
 
 // --- Lifecycle & Data Loading ---
 onMounted(async () => {
-  await loadPlaylistsAndSongs();
-  audioPlayer.value = new Audio();
-  audioPlayer.value.addEventListener('ended', nextTrack);
-  audioPlayer.value.addEventListener('play', () => isPlaying.value = true);
-  audioPlayer.value.addEventListener('pause', () => isPlaying.value = false);
+  try {
+    console.log('App mounted, starting initialization...');
+    
+    console.log('Loading playlists and songs...');
+    await loadPlaylistsAndSongs();
+    
+    console.log('Creating audio player...');
+    audioPlayer.value = new Audio();
+    audioPlayer.value.addEventListener('ended', nextTrack);
+    audioPlayer.value.addEventListener('play', () => {
+      console.log('Audio play event fired');
+      isPlaying.value = true;
+    });
+    audioPlayer.value.addEventListener('pause', () => {
+      console.log('Audio pause event fired');
+      isPlaying.value = false;
+    });
+    
+    console.log('Setting up resize listener...');
+    // Update window dimensions on resize
+    const handleResize = () => {
+      windowWidth.value = window.innerWidth;
+      windowHeight.value = window.innerHeight;
+    };
+    window.addEventListener('resize', handleResize);
+    
+    // Store resize handler for cleanup
+    (window as any).__resizeHandler = handleResize;
+    
+    console.log('App initialization complete!');
+  } catch (error) {
+    console.error('CRITICAL ERROR during mount:', error);
+    // Even on error, try to set up basic functionality
+    try {
+      playlists.value = [{ id: 1, name: 'Minha Playlist', songs: [] }];
+      audioPlayer.value = new Audio();
+    } catch (fallbackError) {
+      console.error('Fallback initialization also failed:', fallbackError);
+    }
+  }
 });
 
 // Cleanup on unmount
 onUnmounted(() => {
   clearSongInfoTimer();
+  
+  // Remove resize listener
+  const handleResize = (window as any).__resizeHandler;
+  if (handleResize) {
+    window.removeEventListener('resize', handleResize);
+  }
 });
 
 async function loadPlaylistsAndSongs() {
-  const loadedPlaylists = await dbService.getPlaylists();
-  const playlistsWithSongs: PlaylistWithSongs[] = [];
+  try {
+    const loadedPlaylists = await dbService.getPlaylists();
+    const playlistsWithSongs: PlaylistWithSongs[] = [];
 
-  if (loadedPlaylists.length === 0) {
-    const newId = await dbService.addPlaylist('Sua Playlist');
-    playlistsWithSongs.push({ id: newId, name: 'Sua Playlist', songs: [] });
-  } else {
-    for (const p of loadedPlaylists) {
-      const songs = await dbService.getSongsByPlaylist(p.id!);
-      playlistsWithSongs.push({ ...p, songs });
+    if (loadedPlaylists.length === 0) {
+      const newId = await dbService.addPlaylist('Sua Playlist');
+      playlistsWithSongs.push({ id: newId, name: 'Sua Playlist', songs: [] });
+    } else {
+      for (const p of loadedPlaylists) {
+        const songs = await dbService.getSongsByPlaylist(p.id!);
+        playlistsWithSongs.push({ 
+          id: p.id!,
+          name: p.name,
+          songs
+        });
+      }
     }
-  }
-  
-  playlists.value = playlistsWithSongs;
-  if (playlists.value.length > 0) {
-    activePlaylistId.value = playlists.value[0].id!;
+
+    playlists.value = playlistsWithSongs;
+    if (playlists.value.length > 0) {
+      activePlaylistId.value = playlists.value[0].id!;
+    }
+  } catch (error) {
+    console.error('Error loading playlists:', error);
+    playlists.value = [{ id: 1, name: 'Minha Playlist', songs: [] }];
   }
 }
 
@@ -244,8 +311,7 @@ async function savePlaylistName(playlistId: number) {
       // Update in database
       await dbService.updatePlaylist({
         id: playlistId,
-        name: editingPlaylistName.value.trim(),
-        isCollapsed: playlist.isCollapsed
+        name: editingPlaylistName.value.trim()
       });
       
       // Update local state immediately
@@ -256,16 +322,70 @@ async function savePlaylistName(playlistId: number) {
 }
 
 // --- Song Info Visibility Functions ---
-function handlePlaylistTouchStart() {
-  if (isSmallScreen.value) {
-    hideSongInfo.value = true;
-    clearSongInfoTimer();
+let hideDelayTimer: number | null = null;
+
+function handlePlaylistTouchStart(event: TouchEvent | MouseEvent) {
+  if (!isSmallScreen.value) return;
+  
+  // Don't track for buttons, inputs, or interactive elements
+  const target = event.target as HTMLElement;
+  if (target.closest('button') || 
+      target.closest('input') || 
+      target.closest('.add-playlist-trigger')) {
+    return;
+  }
+  
+  if (event instanceof TouchEvent && event.touches.length > 0) {
+    touchStartY = event.touches[0].clientY;
+    touchStartTime = Date.now();
+    isScrolling = false;
+  }
+  
+  clearHideDelayTimer();
+  clearSongInfoTimer();
+}
+
+function handlePlaylistTouchMove(event: TouchEvent | MouseEvent) {
+  if (!isSmallScreen.value) return;
+  
+  if (event instanceof TouchEvent && event.touches.length > 0) {
+    const touchCurrentY = event.touches[0].clientY;
+    const deltaY = Math.abs(touchCurrentY - touchStartY);
+    
+    // If moved more than 10px, consider it scrolling
+    if (deltaY > 10 && !isScrolling) {
+      isScrolling = true;
+      // Add delay before hiding for smoother UX
+      hideDelayTimer = setTimeout(() => {
+        hideSongInfo.value = true;
+      }, 150);
+    }
   }
 }
 
-function handlePlaylistTouchEnd() {
-  if (isSmallScreen.value) {
+function handlePlaylistTouchEnd(event: TouchEvent | MouseEvent) {
+  if (!isSmallScreen.value) return;
+  
+  const target = event.target as HTMLElement;
+  if (target.closest('button') || 
+      target.closest('input') || 
+      target.closest('.add-playlist-trigger')) {
+    return;
+  }
+  
+  clearHideDelayTimer();
+  
+  // Always reset scrolling state and show info after delay
+  if (isScrolling) {
     startSongInfoTimer();
+    isScrolling = false;
+  }
+}
+
+function clearHideDelayTimer() {
+  if (hideDelayTimer) {
+    clearTimeout(hideDelayTimer);
+    hideDelayTimer = null;
   }
 }
 
@@ -273,7 +393,8 @@ function startSongInfoTimer() {
   clearSongInfoTimer();
   songInfoHideTimer = setTimeout(() => {
     hideSongInfo.value = false;
-  }, 3000); // Show again after 3 seconds
+    console.log('Song info shown again after scroll');
+  }, 2000); // Show again after 2 seconds
 }
 
 function clearSongInfoTimer() {
@@ -287,29 +408,38 @@ function showSongInfoImmediately() {
   clearSongInfoTimer();
   hideSongInfo.value = false;
 }
+
+function toggleHeaderCollapse() {
+  isHeaderCollapsed.value = !isHeaderCollapsed.value;
+}
 </script>
 
 <template>
   <div id="app-container">
     <div class="player-main">
-      <h1>Player de Música Offline</h1>
-      <p class="subtitle">Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.</p>
+      <!-- Collapse toggle button for mobile -->
+      <button v-if="isSmallScreen" @click="toggleHeaderCollapse" class="collapse-toggle" :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'">
+        {{ isHeaderCollapsed ? '∨' : '∧' }}
+      </button>
+      
+      <h1 v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed" class="fade-element">Player de Música Offline</h1>
+      <p class="subtitle fade-element" v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed">Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.</p>
       
       <!-- Show visualizer only on desktop when music is playing -->
-      <div v-if="currentSong && isDesktop" class="visualizer-container">
+      <div v-if="isDesktop && currentSong" class="visualizer-container">
         <AudioVisualizer 
           :audio-element="audioPlayer" 
           :is-playing="isPlaying" 
         />
       </div>
       
-      <div class="song-info" v-show="!hideSongInfo || !isSmallScreen">
+      <div class="song-info fade-element" v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed">
         <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
         <p>{{ currentSong?.artist }}</p>
       </div>
       
       <!-- Small indicator for small screens when info is hidden -->
-      <div v-if="hideSongInfo && isSmallScreen && currentSong" class="song-info-indicator">
+      <div v-if="(hideSongInfo || isHeaderCollapsed) && isSmallScreen" class="song-info-indicator fade-element">
         ♪
       </div>
 
@@ -324,6 +454,7 @@ function showSongInfoImmediately() {
 
     <div class="playlist-view" 
          @touchstart="handlePlaylistTouchStart"
+         @touchmove="handlePlaylistTouchMove"
          @touchend="handlePlaylistTouchEnd"
          @mousedown="handlePlaylistTouchStart"
          @mouseup="handlePlaylistTouchEnd">
@@ -440,6 +571,16 @@ function showSongInfoImmediately() {
   margin-bottom: 10px;
 }
 
+/* Smooth fade transition for elements */
+.fade-element {
+  transition: opacity 0.4s ease-in-out, transform 0.4s ease-in-out;
+}
+
+.fade-element[style*="display: none"] {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
 .visualizer-container {
   width: 100%;
   height: 200px;
@@ -480,6 +621,32 @@ function showSongInfoImmediately() {
   opacity: 0.6;
   margin: 15px 0;
   animation: pulse 2s infinite;
+}
+
+.collapse-toggle {
+  position: fixed;
+  top: 10px;
+  right: 15px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 1.5em;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.collapse-toggle:active {
+  transform: scale(0.95);
+  background: rgba(255, 255, 255, 0.25);
 }
 
 @keyframes pulse {
@@ -614,6 +781,9 @@ function showSongInfoImmediately() {
   cursor: pointer;
   opacity: 0.7;
   transition: all 0.2s ease;
+  padding: 8px;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .delete-playlist-btn:hover {
@@ -695,9 +865,10 @@ function showSongInfoImmediately() {
   color: white;
   font-size: 1em;
   font-weight: bold;
-  padding: 10px 20px;
+  padding: 12px 24px;
   cursor: pointer;
   transition: background-color 0.2s;
+  min-height: 48px;
 }
 
 .add-songs-btn:hover {
@@ -895,14 +1066,17 @@ function showSongInfoImmediately() {
   }
 
   .new-playlist-input {
-    padding: 12px 50px 12px 15px;
-    font-size: 1em;
+    padding: 16px 60px 16px 20px;
+    font-size: 1.1em;
+    min-height: 52px;
   }
 
   .add-playlist-btn {
     right: 8px;
-    font-size: 1.6em;
-    padding: 8px;
+    font-size: 2em;
+    padding: 10px 12px;
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .playlist-container {
@@ -934,22 +1108,26 @@ function showSongInfoImmediately() {
   }
 
   .edit-playlist-input {
-    font-size: 1.2em;
-    padding: 10px;
+    font-size: 1.3em;
+    padding: 14px;
+    min-height: 50px;
   }
 
   .save-playlist-btn, 
   .cancel-playlist-btn {
-    padding: 8px 12px;
-    font-size: 1.1em;
+    padding: 12px 16px;
+    font-size: 1.2em;
+    min-width: 50px;
+    min-height: 48px;
     min-width: 40px;
   }
 
   .add-songs-btn {
     flex: 1;
-    padding: 12px 15px;
-    font-size: 1em;
+    padding: 16px 20px;
+    font-size: 1.1em;
     border-radius: 25px;
+    min-height: 52px;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
@@ -959,8 +1137,10 @@ function showSongInfoImmediately() {
   }
 
   .delete-playlist-btn {
-    font-size: 1.8em;
-    padding: 8px 12px;
+    font-size: 2em;
+    padding: 10px 14px;
+    min-width: 48px;
+    min-height: 48px;
     border-radius: 50%;
     background: rgba(255, 0, 0, 0.1);
     min-width: 45px;

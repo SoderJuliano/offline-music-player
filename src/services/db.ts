@@ -3,7 +3,6 @@ import Dexie, { type Table } from 'dexie';
 export interface Playlist {
   id?: number;
   name: string;
-  isCollapsed?: boolean;
 }
 
 export interface Song {
@@ -22,7 +21,7 @@ export class MySubClassedDexie extends Dexie {
   songs!: Table<Song>;
 
   constructor() {
-    super('offlinePlayerDB_v2'); // Changed DB name to force a reset
+    super('offlinePlayerDB_v3'); // Changed DB name to force a reset with new structure
     this.version(1).stores({
       playlists: '++id, name',
       songs: '++id, playlistId, title', 
@@ -35,6 +34,17 @@ class DbService {
 
   constructor() {
     this.db = new MySubClassedDexie();
+    // Delete old databases to free up space
+    this.deleteOldDatabases();
+  }
+
+  private async deleteOldDatabases() {
+    try {
+      await Dexie.delete('offlinePlayerDB');
+      await Dexie.delete('offlinePlayerDB_v2');
+    } catch (error) {
+      // Ignore errors if databases don't exist
+    }
   }
 
   async getPlaylists(): Promise<Playlist[]> {
@@ -42,7 +52,7 @@ class DbService {
   }
 
   async addPlaylist(name: string): Promise<number> {
-    return await this.db.playlists.add({ name, isCollapsed: false });
+    return await this.db.playlists.add({ name });
   }
 
   async updatePlaylist(playlist: Playlist): Promise<number> {
