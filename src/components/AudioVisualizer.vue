@@ -20,12 +20,19 @@ let audioContext: AudioContext | null = null
 let analyser: AnalyserNode | null = null
 let dataArray: Uint8Array | null = null
 let source: MediaElementAudioSourceNode | null = null
+let isPageVisible = true
+
+// Detect iOS
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
 
 onMounted(() => {
   initVisualizer()
+  // Listen for page visibility changes
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   cleanup()
 })
 
@@ -73,36 +80,37 @@ function resizeCanvas() {
 
 function setupAudioContext(audioElement: HTMLAudioElement) {
   try {
-    // Create audio context only once
     if (!audioContext) {
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
     }
 
-    // Create source only once
     if (!source) {
       source = audioContext.createMediaElementSource(audioElement)
-      
-      // Create analyser
       analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
       
       const bufferLength = analyser.frequencyBinCount
       dataArray = new Uint8Array(new ArrayBuffer(bufferLength))
       
-      // Connect audio graph
       source.connect(analyser)
       analyser.connect(audioContext.destination)
     }
   } catch (error) {
-    console.error('Error setting up audio context:', error)
+    console.error('Error setting up audio context. Visualization will be disabled.', error)
   }
 }
 
 function startVisualization() {
-  if (!audioContext || audioContext.state === 'suspended') {
-    audioContext?.resume()
+  if (!audioContext || !props.isPlaying) return
+
+  // Resume context if it was suspended by the browser
+  if (audioContext.state === 'suspended') {
+    audioContext.resume().then(() => {
+      draw()
+    })
+  } else {
+    draw()
   }
-  draw()
 }
 
 function stopVisualization() {
@@ -113,7 +121,7 @@ function stopVisualization() {
 }
 
 function draw() {
-  if (!canvas.value || !analyser || !dataArray) return
+  if (!canvas.value || !analyser || !dataArray || !props.isPlaying) return
   
   const ctx = canvas.value.getContext('2d')
   if (!ctx) return
@@ -124,10 +132,9 @@ function draw() {
   ;(analyser as any).getByteFrequencyData(dataArray)
   
   // Clear canvas
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.1)'
-  ctx.fillRect(0, 0, canvas.value.width, canvas.value.height)
+  ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
   
-  // Draw visualization
+  // Draw waveform
   drawWaveform(ctx)
 }
 
@@ -193,15 +200,74 @@ function drawSineWave(ctx: CanvasRenderingContext2D, gradient: CanvasGradient) {
   ctx.globalAlpha = 1
 }
 
+function handleVisibilityChange() {
+  if (document.hidden) {
+    // Page hidden - disconnect Web Audio API to allow native background playback
+    isPageVisible = false
+    stopVisualization()
+    disconnectWebAudio()
+  } else {
+    // Page visible - reconnect Web Audio API for visualization
+    isPageVisible = true
+    if (props.isPlaying && props.audioElement) {
+      reconnectWebAudio()
+      startVisualization()
+    }
+  }
+}
+
+function disconnectWebAudio() {
+  try {
+    if (source) {
+      source.disconnect()
+      source = null
+    }
+    if (analyser) {
+      analyser.disconnect()
+      analyser = null
+    }
+    // Keep audioContext alive but disconnected
+  } catch (error) {
+    console.error('Error disconnecting:', error)
+  }
+}
+
+function reconnectWebAudio() {
+  try {
+    if (!props.audioElement || !audioContext) return
+    
+    // Create new source and analyser
+    if (!source) {
+      source = audioContext.createMediaElementSource(props.audioElement)
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 256
+      
+      const bufferLength = analyser.frequencyBinCount
+      dataArray = new Uint8Array(new ArrayBuffer(bufferLength))
+      
+      source.connect(analyser)
+      analyser.connect(audioContext.destination)
+    }
+  } catch (error) {
+    // Audio element already connected - this is okay, audio will work without visualization
+    console.warn('Could not reconnect visualizer:', error)
+  }
+}
+
 function cleanup() {
   stopVisualization()
   
   if (source) {
     source.disconnect()
+    source = null
   }
-  
+  if (analyser) {
+    analyser.disconnect()
+    analyser = null
+  }
   if (audioContext) {
     audioContext.close()
+    audioContext = null
   }
   
   window.removeEventListener('resize', resizeCanvas)

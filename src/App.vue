@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue';
 import { dbService, type Playlist, type Song } from './services/db';
 import AudioVisualizer from './components/AudioVisualizer.vue';
 
@@ -25,6 +25,10 @@ const isAddingNewPlaylist = ref(false); // New state for toggling new playlist i
 const editingPlaylistId = ref<number | null>(null);
 const editingPlaylistName = ref('');
 
+// State for hiding song info on small screens
+const hideSongInfo = ref(false);
+let songInfoHideTimer: number | null = null;
+
 // --- Computed Properties ---
 const activeSongs = computed(() => {
   if (!activePlaylistId.value) return [];
@@ -38,6 +42,16 @@ const currentSong = computed(() => {
     : null;
 });
 
+// Check if screen is small (like iPhone 13, iPhone SE)
+const isSmallScreen = computed(() => {
+  return window.innerHeight <= 750 && window.innerWidth <= 450;
+});
+
+// Check if is desktop (large screen)
+const isDesktop = computed(() => {
+  return window.innerWidth > 768;
+});
+
 // --- Lifecycle & Data Loading ---
 onMounted(async () => {
   await loadPlaylistsAndSongs();
@@ -45,6 +59,11 @@ onMounted(async () => {
   audioPlayer.value.addEventListener('ended', nextTrack);
   audioPlayer.value.addEventListener('play', () => isPlaying.value = true);
   audioPlayer.value.addEventListener('pause', () => isPlaying.value = false);
+});
+
+// Cleanup on unmount
+onUnmounted(() => {
+  clearSongInfoTimer();
 });
 
 async function loadPlaylistsAndSongs() {
@@ -78,6 +97,9 @@ function playSong(index: number, playlistId: number) {
   
   const song = activeSongs.value[index];
   if (!song) return;
+
+  // Show song info immediately when playing a song
+  showSongInfoImmediately();
 
   if (currentObjectURL) {
     URL.revokeObjectURL(currentObjectURL);
@@ -232,28 +254,63 @@ async function savePlaylistName(playlistId: number) {
   }
   cancelEditingPlaylist();
 }
+
+// --- Song Info Visibility Functions ---
+function handlePlaylistTouchStart() {
+  if (isSmallScreen.value) {
+    hideSongInfo.value = true;
+    clearSongInfoTimer();
+  }
+}
+
+function handlePlaylistTouchEnd() {
+  if (isSmallScreen.value) {
+    startSongInfoTimer();
+  }
+}
+
+function startSongInfoTimer() {
+  clearSongInfoTimer();
+  songInfoHideTimer = setTimeout(() => {
+    hideSongInfo.value = false;
+  }, 3000); // Show again after 3 seconds
+}
+
+function clearSongInfoTimer() {
+  if (songInfoHideTimer) {
+    clearTimeout(songInfoHideTimer);
+    songInfoHideTimer = null;
+  }
+}
+
+function showSongInfoImmediately() {
+  clearSongInfoTimer();
+  hideSongInfo.value = false;
+}
 </script>
 
 <template>
   <div id="app-container">
     <div class="player-main">
-      <!-- Show static content when no music is playing -->
-      <div v-if="!currentSong" class="static-content">
-        <h1>Player de Música Offline</h1>
-        <p class="subtitle">Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.</p>
-      </div>
+      <h1>Player de Música Offline</h1>
+      <p class="subtitle">Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.</p>
       
-      <!-- Show visualizer when music is playing -->
-      <div v-else class="visualizer-container">
+      <!-- Show visualizer only on desktop when music is playing -->
+      <div v-if="currentSong && isDesktop" class="visualizer-container">
         <AudioVisualizer 
           :audio-element="audioPlayer" 
           :is-playing="isPlaying" 
         />
       </div>
       
-      <div class="song-info">
+      <div class="song-info" v-show="!hideSongInfo || !isSmallScreen">
         <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
         <p>{{ currentSong?.artist }}</p>
+      </div>
+      
+      <!-- Small indicator for small screens when info is hidden -->
+      <div v-if="hideSongInfo && isSmallScreen && currentSong" class="song-info-indicator">
+        ♪
       </div>
 
       <div class="controls">
@@ -265,7 +322,11 @@ async function savePlaylistName(playlistId: number) {
       </div>
     </div>
 
-    <div class="playlist-view">
+    <div class="playlist-view" 
+         @touchstart="handlePlaylistTouchStart"
+         @touchend="handlePlaylistTouchEnd"
+         @mousedown="handlePlaylistTouchStart"
+         @mouseup="handlePlaylistTouchEnd">
       <!-- New Playlist Form -->
       <div class="new-playlist-controls">
         <span v-if="!isAddingNewPlaylist" @click="isAddingNewPlaylist = true" class="add-playlist-trigger">
@@ -374,8 +435,9 @@ async function savePlaylistName(playlistId: number) {
   text-align: center;
 }
 
-.static-content {
-  margin-bottom: 40px;
+.player-main h1 {
+  font-size: 2.2em;
+  margin-bottom: 10px;
 }
 
 .visualizer-container {
@@ -389,11 +451,6 @@ async function savePlaylistName(playlistId: number) {
   align-items: center;
 }
 
-.player-main h1 {
-  font-size: 2.2em;
-  margin-bottom: 10px;
-}
-
 .subtitle {
   font-size: 1em;
   opacity: 0.8;
@@ -404,6 +461,7 @@ async function savePlaylistName(playlistId: number) {
 .song-info {
   margin: 30px 0;
   min-height: 80px;
+  transition: opacity 0.3s ease;
 }
 
 .song-info h2 {
@@ -415,6 +473,19 @@ async function savePlaylistName(playlistId: number) {
   font-size: 1em;
   opacity: 0.8;
   margin-top: 8px;
+}
+
+.song-info-indicator {
+  font-size: 2em;
+  opacity: 0.6;
+  margin: 15px 0;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
 }
 
 .controls {
@@ -952,21 +1023,6 @@ async function savePlaylistName(playlistId: number) {
   .player-main {
     padding: 15px 10px;
     box-sizing: border-box;
-  }
-
-  .static-content {
-    max-width: calc(100dvw - 20px);
-  }
-
-  .visualizer-container {
-    height: 120px;
-    margin-bottom: 15px;
-    max-width: calc(100dvw - 20px);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   .player-main h1 {
