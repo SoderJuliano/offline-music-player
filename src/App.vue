@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick, defineAsyncComponent, h } from 'vue';
-import { dbService, type Playlist, type Song } from './services/db';
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h } from 'vue';
+import { type Song } from './services/db';
+import { PlaylistService, type PlaylistWithSongs } from './services/playlist';
+import { PlaybackService } from './services/playback';
+import './styles/App.css';
 
-// Lazy load AudioVisualizer only when needed
 const AudioVisualizer = defineAsyncComponent({
   loader: () => import('./components/AudioVisualizer.vue'),
   errorComponent: { render: () => h('div') },
@@ -10,43 +12,30 @@ const AudioVisualizer = defineAsyncComponent({
   timeout: 3000,
 });
 
-// --- Interfaces ---
-interface PlaylistWithSongs {
-  id: number;
-  name: string;
-  songs: Song[];
-}
-
-// --- Component State ---
 const playlists = ref<PlaylistWithSongs[]>([]);
 const activePlaylistId = ref<number | null>(null);
 const currentSongIndex = ref(-1);
-
 const audioPlayer = ref<HTMLAudioElement | null>(null);
-let currentObjectURL: string | null = null;
 const isPlaying = ref(false);
-
 const newPlaylistName = ref('');
 const fileInputRef = ref<HTMLInputElement | null>(null);
-const isAddingNewPlaylist = ref(false); // New state for toggling new playlist input
-
-// State for editing playlist names
+const isAddingNewPlaylist = ref(false);
 const editingPlaylistId = ref<number | null>(null);
 const editingPlaylistName = ref('');
-
-// State for hiding song info on small screens
 const hideSongInfo = ref(false);
-const isHeaderCollapsed = ref(false); // Manual toggle state
-let songInfoHideTimer: number | null = null;
-let touchStartY = 0;
-let touchStartTime = 0;
-let isScrolling = false;
-
-// Reactive window dimensions
+const isHeaderCollapsed = ref(false);
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024);
 const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 768);
 
-// --- Computed Properties ---
+let songInfoHideTimer: number | null = null;
+let isLoadingPlaylists = false;
+let touchStartY = 0;
+let touchStartTime = 0;
+let isScrolling = false;
+let hideDelayTimer: number | null = null;
+
+const playlistService = new PlaylistService();
+let playbackService: PlaybackService;
 const activeSongs = computed(() => {
   if (!activePlaylistId.value) return [];
   const activePlaylist = playlists.value.find(p => p.id === activePlaylistId.value);
@@ -59,65 +48,37 @@ const currentSong = computed(() => {
     : null;
 });
 
-// Check if screen is small (like iPhone 13, iPhone SE)
-const isSmallScreen = computed(() => {
-  return windowHeight.value <= 750 && windowWidth.value <= 450;
-});
+const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450);
+const isDesktop = computed(() => windowWidth.value > 768);
 
-// Check if is desktop (large screen)
-const isDesktop = computed(() => {
-  return windowWidth.value > 768;
-});
-
-// --- Lifecycle & Data Loading ---
 onMounted(async () => {
+  window.addEventListener('unhandledrejection', (event) => {
+    event.preventDefault();
+  });
+  
   try {
-    console.log('App mounted, starting initialization...');
-    
-    console.log('Loading playlists and songs...');
     await loadPlaylistsAndSongs();
     
-    console.log('Creating audio player...');
-    audioPlayer.value = new Audio();
-    audioPlayer.value.addEventListener('ended', nextTrack);
-    audioPlayer.value.addEventListener('play', () => {
-      console.log('Audio play event fired');
-      isPlaying.value = true;
-    });
-    audioPlayer.value.addEventListener('pause', () => {
-      console.log('Audio pause event fired');
-      isPlaying.value = false;
-    });
+    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs);
+    audioPlayer.value = playbackService.initialize();
     
-    console.log('Setting up resize listener...');
-    // Update window dimensions on resize
     const handleResize = () => {
       windowWidth.value = window.innerWidth;
       windowHeight.value = window.innerHeight;
     };
     window.addEventListener('resize', handleResize);
-    
-    // Store resize handler for cleanup
     (window as any).__resizeHandler = handleResize;
-    
-    console.log('App initialization complete!');
-  } catch (error) {
-    console.error('CRITICAL ERROR during mount:', error);
-    // Even on error, try to set up basic functionality
-    try {
-      playlists.value = [{ id: 1, name: 'Minha Playlist', songs: [] }];
-      audioPlayer.value = new Audio();
-    } catch (fallbackError) {
-      console.error('Fallback initialization also failed:', fallbackError);
-    }
+  } catch (error: any) {
+    playlists.value = [{ id: 1, name: 'Minha Playlist', songs: [] }];
+    audioPlayer.value = new Audio();
   }
 });
 
-// Cleanup on unmount
 onUnmounted(() => {
   clearSongInfoTimer();
-  
-  // Remove resize listener
+  if (playbackService) {
+    playbackService.cleanup();
+  }
   const handleResize = (window as any).__resizeHandler;
   if (handleResize) {
     window.removeEventListener('resize', handleResize);
@@ -125,119 +86,65 @@ onUnmounted(() => {
 });
 
 async function loadPlaylistsAndSongs() {
+  if (isLoadingPlaylists) return;
+  
+  isLoadingPlaylists = true;
+  const safetyTimeout = setTimeout(() => {
+    isLoadingPlaylists = false;
+  }, 10000);
+  
   try {
-    const loadedPlaylists = await dbService.getPlaylists();
-    const playlistsWithSongs: PlaylistWithSongs[] = [];
-
-    if (loadedPlaylists.length === 0) {
-      const newId = await dbService.addPlaylist('Sua Playlist');
-      playlistsWithSongs.push({ id: newId, name: 'Sua Playlist', songs: [] });
-    } else {
-      for (const p of loadedPlaylists) {
-        const songs = await dbService.getSongsByPlaylist(p.id!);
-        playlistsWithSongs.push({ 
-          id: p.id!,
-          name: p.name,
-          songs
-        });
-      }
-    }
-
-    playlists.value = playlistsWithSongs;
+    playlists.value = await playlistService.loadPlaylistsAndSongs();
     if (playlists.value.length > 0) {
       activePlaylistId.value = playlists.value[0].id!;
     }
   } catch (error) {
-    console.error('Error loading playlists:', error);
     playlists.value = [{ id: 1, name: 'Minha Playlist', songs: [] }];
+  } finally {
+    clearTimeout(safetyTimeout);
+    isLoadingPlaylists = false;
   }
 }
 
-// --- Playback Controls ---
 function playSong(index: number, playlistId: number) {
   if (activePlaylistId.value !== playlistId) {
     activePlaylistId.value = playlistId;
   }
-
-  if (index < 0 || index >= activeSongs.value.length) return;
-  currentSongIndex.value = index;
-  
-  const song = activeSongs.value[index];
-  if (!song) return;
-
-  // Show song info immediately when playing a song
   showSongInfoImmediately();
-
-  if (currentObjectURL) {
-    URL.revokeObjectURL(currentObjectURL);
-  }
-  currentObjectURL = URL.createObjectURL(song.data);
-
-  if (audioPlayer.value) {
-    audioPlayer.value.src = currentObjectURL;
-    audioPlayer.value.play();
-  }
+  playbackService.playSong(index);
 }
 
 function togglePlayPause() {
-  if (!audioPlayer.value) return;
-  if (isPlaying.value) {
-    audioPlayer.value.pause();
-  } else {
-    if (currentSong.value) {
-      audioPlayer.value.play();
-    } else if (activeSongs.value.length > 0) {
-      playSong(0, activePlaylistId.value!);
-    }
-  }
+  playbackService.togglePlayPause();
 }
 
 function nextTrack() {
-  const nextIndex = currentSongIndex.value + 1;
-  if (nextIndex < activeSongs.value.length) {
-    playSong(nextIndex, activePlaylistId.value!);
-  } else {
-    // End of playlist, loop back to the first song if available
-    if (activeSongs.value.length > 0) {
-      playSong(0, activePlaylistId.value!);
-    } else {
-      isPlaying.value = false;
-      currentSongIndex.value = -1;
-      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
-      currentObjectURL = null;
-      if(audioPlayer.value) audioPlayer.value.src = '';
-    }
-  }
+  playbackService.nextTrack();
 }
 
 function prevTrack() {
-  const prevIndex = currentSongIndex.value - 1;
-  if (prevIndex >= 0) {
-    playSong(prevIndex, activePlaylistId.value!);
-  }
+  playbackService.prevTrack();
 }
 
-// --- Playlist & Song Management ---
 async function addPlaylist() {
   if (newPlaylistName.value.trim()) {
-    await dbService.addPlaylist(newPlaylistName.value.trim());
+    await playlistService.addPlaylist(newPlaylistName.value);
     newPlaylistName.value = '';
-    isAddingNewPlaylist.value = false; // Hide input after adding
+    isAddingNewPlaylist.value = false;
     await loadPlaylistsAndSongs();
   }
 }
 
 function handleNewPlaylistBlur() {
-    // Use a small delay to allow the add button click to register first
-    setTimeout(() => {
-        if (newPlaylistName.value.trim() === '') {
-            isAddingNewPlaylist.value = false;
-        }
-    }, 200);
+  setTimeout(() => {
+    if (newPlaylistName.value.trim() === '') {
+      isAddingNewPlaylist.value = false;
+    }
+  }, 200);
 }
 
 function triggerFileInput(playlistId: number) {
-  activePlaylistId.value = playlistId; // Set active playlist for upload
+  activePlaylistId.value = playlistId;
   fileInputRef.value?.click();
 }
 
@@ -261,8 +168,12 @@ async function handleFileSelection(event: Event) {
     data: file,
   };
 
-  await dbService.addSong(newSong);
-  await loadPlaylistsAndSongs();
+  try {
+    await playlistService.addSong(newSong);
+    await loadPlaylistsAndSongs();
+  } catch (error) {
+    alert('Erro ao adicionar música. O arquivo pode ser muito grande para o dispositivo.');
+  }
   input.value = '';
 }
 
@@ -271,29 +182,27 @@ async function deleteSong(songId: number, playlistId: number) {
     nextTrack();
   }
   
-  await dbService.deleteSong(songId);
+  await playlistService.deleteSong(songId);
   
-  // Find the playlist and remove the song locally for instant UI update
   const playlist = playlists.value.find(p => p.id === playlistId);
   if (playlist) {
     const songIndex = playlist.songs.findIndex(s => s.id === songId);
     if (songIndex > -1) {
       playlist.songs.splice(songIndex, 1);
-       if (currentSongIndex.value >= songIndex && activePlaylistId.value === playlistId) {
-          currentSongIndex.value--;
-       }
+      if (currentSongIndex.value >= songIndex && activePlaylistId.value === playlistId) {
+        currentSongIndex.value--;
+      }
     }
   }
 }
 
 async function deletePlaylist(playlistId: number) {
   if (window.confirm('Tem certeza que deseja apagar esta playlist e todas as suas músicas?')) {
-    await dbService.deletePlaylist(playlistId);
+    await playlistService.deletePlaylist(playlistId);
     await loadPlaylistsAndSongs();
   }
 }
 
-// --- Playlist Editing Functions ---
 function startEditingPlaylist(playlist: PlaylistWithSongs) {
   editingPlaylistId.value = playlist.id!;
   editingPlaylistName.value = playlist.name;
@@ -305,24 +214,30 @@ function cancelEditingPlaylist() {
 }
 
 async function savePlaylistName(playlistId: number) {
-  if (editingPlaylistName.value.trim()) {
-    const playlist = playlists.value.find(p => p.id === playlistId);
-    if (playlist) {
-      // Update in database
-      await dbService.updatePlaylist({
-        id: playlistId,
-        name: editingPlaylistName.value.trim()
-      });
-      
-      // Update local state immediately
-      playlist.name = editingPlaylistName.value.trim();
+  try {
+    const newName = editingPlaylistName.value.trim();
+    
+    if (!newName) {
+      cancelEditingPlaylist();
+      return;
     }
+    
+    const playlist = playlists.value.find(p => p.id === playlistId);
+    if (!playlist) {
+      cancelEditingPlaylist();
+      return;
+    }
+    
+    const success = await playlistService.updatePlaylistName(playlistId, newName);
+    if (success) {
+      playlist.name = newName;
+    }
+  } catch (error: any) {
+    alert(error.message || 'Erro ao salvar nome da playlist.');
   }
+  
   cancelEditingPlaylist();
 }
-
-// --- Song Info Visibility Functions ---
-let hideDelayTimer: number | null = null;
 
 function handlePlaylistTouchStart(event: TouchEvent | MouseEvent) {
   if (!isSmallScreen.value) return;
@@ -393,8 +308,7 @@ function startSongInfoTimer() {
   clearSongInfoTimer();
   songInfoHideTimer = setTimeout(() => {
     hideSongInfo.value = false;
-    console.log('Song info shown again after scroll');
-  }, 2000); // Show again after 2 seconds
+  }, 2000);
 }
 
 function clearSongInfoTimer() {
@@ -436,11 +350,6 @@ function toggleHeaderCollapse() {
       <div class="song-info fade-element" v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed">
         <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
         <p>{{ currentSong?.artist }}</p>
-      </div>
-      
-      <!-- Small indicator for small screens when info is hidden -->
-      <div v-if="(hideSongInfo || isHeaderCollapsed) && isSmallScreen" class="song-info-indicator fade-element">
-        ♪
       </div>
 
       <div class="controls">
@@ -614,13 +523,6 @@ function toggleHeaderCollapse() {
   font-size: 1em;
   opacity: 0.8;
   margin-top: 8px;
-}
-
-.song-info-indicator {
-  font-size: 2em;
-  opacity: 0.6;
-  margin: 15px 0;
-  animation: pulse 2s infinite;
 }
 
 .collapse-toggle {
@@ -1200,25 +1102,72 @@ function toggleHeaderCollapse() {
 
 /* Extra small devices - iPhone SE and similar */
 @media (max-width: 420px) {
+  #app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
   .player-main {
-    padding: 15px 10px;
+    padding: 2px 10px;
     box-sizing: border-box;
+    max-height: 15vh;
+    min-height: auto;
+    flex-shrink: 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .playlist-view {
+    flex: 1;
+    overflow-y: auto;
+    padding-top: 10px;
+    padding-bottom: 30vh;
   }
 
   .player-main h1 {
-    font-size: 1.6em;
+    font-size: 1.2em;
     max-width: calc(100dvw - 20px);
     word-wrap: break-word;
+    margin-bottom: 5px;
   }
 
   .subtitle {
-    font-size: 0.85em;
+    font-size: 0.75em;
     max-width: calc(100dvw - 20px);
     word-wrap: break-word;
+    margin-bottom: 8px;
+  }
+
+  .song-info {
+    margin: 5px 0;
   }
 
   .song-info h2 {
-    font-size: 1.2em;
+    font-size: 0.95em;
+    margin: 3px 0;
+  }
+
+  .song-info p {
+    font-size: 0.8em;
+  }
+
+  .controls {
+    gap: 8px;
+    margin-top: 5px;
+  }
+
+  .controls button {
+    width: 38px;
+    height: 38px;
+    font-size: 1.1em;
+  }
+
+  .play-pause-btn {
+    width: 48px !important;
+    height: 48px !important;
+    font-size: 1.4em !important;
   }
 
   .controls {
