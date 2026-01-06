@@ -3,7 +3,6 @@ import type { Song } from './db';
 
 export class PlaybackService {
   private audioPlayer: HTMLAudioElement | null = null;
-  private currentObjectURL: string | null = null;
   private isPlaying: Ref<boolean>;
   private currentSongIndex: Ref<number>;
   private activeSongs: Ref<Song[]>;
@@ -35,15 +34,10 @@ export class PlaybackService {
     this.currentSongIndex.value = index;
     
     const song = this.activeSongs.value[index];
-    if (!song) return;
-
-    if (this.currentObjectURL) {
-      URL.revokeObjectURL(this.currentObjectURL);
-    }
-    this.currentObjectURL = URL.createObjectURL(song.data);
+    if (!song || !song.data) return;
 
     if (this.audioPlayer) {
-      this.audioPlayer.src = this.currentObjectURL;
+      this.audioPlayer.src = song.data; // Directly use the base64 data URL
       this.audioPlayer.play();
     }
   }
@@ -82,20 +76,15 @@ export class PlaybackService {
   }
 
   stop() {
+    if (!this.audioPlayer) return;
+    this.audioPlayer.pause();
+    this.audioPlayer.src = '';
     this.isPlaying.value = false;
     this.currentSongIndex.value = -1;
-    if (this.currentObjectURL) {
-      URL.revokeObjectURL(this.currentObjectURL);
-    }
-    this.currentObjectURL = null;
-    if (this.audioPlayer) {
-      this.audioPlayer.src = '';
-    }
   }
 
   cleanup() {
-    if (this.currentObjectURL) {
-      URL.revokeObjectURL(this.currentObjectURL);
-    }
+    // No longer need to revoke Object URLs, so this can be empty
+    // or we can just remove the call to it.
   }
 }

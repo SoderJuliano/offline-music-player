@@ -39,7 +39,8 @@ export class PlaylistService {
 
       return playlistsWithSongs;
     } catch (error) {
-      return [{ id: 1, name: 'Minha Playlist', songs: [] }];
+      console.error("Critical error loading playlists and songs:", error);
+      throw error;
     }
   }
 

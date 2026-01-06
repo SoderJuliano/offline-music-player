@@ -41,7 +41,7 @@
 
 .player-main h1 {
   font-size: 2.2em;
-  margin-bottom: 10px;
+  margin: 5px 0px 0px 0px;
 }
 
 .fade-element {
@@ -405,7 +405,7 @@
 
   #app-container {
     flex-direction: column;
-    height: 100vh;
+    height: calc(100vh + 150px);
     overflow: hidden;
     position: fixed;
     width: 100%;
@@ -435,12 +435,12 @@
 
   .subtitle {
     font-size: 0.9em;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
 
   .song-info {
     margin: 15px 0;
-    min-height: 60px;
+    min-height: 20px;
   }
 
   .song-info h2 {
@@ -487,8 +487,12 @@
   .playlist-header {
     flex-direction: column;
     align-items: stretch;
-    gap: 10px;
+    gap: 1px;
     padding: 15px;
+  }
+
+  .song-title {
+    font-size: 1.0em !important;
   }
 
   .playlist-name-display,
@@ -525,9 +529,15 @@
 }
 
 @media (max-width: 420px) {
+
+    .new-playlist-controls {
+        margin-bottom: 2px !important;
+        padding-bottom: 2px !important;
+    }
+
   .player-main {
     padding: 2px 10px;
-    max-height: 15vh;
+    max-height: 35vh;
     min-height: auto;
     flex-shrink: 0;
     overflow: hidden;
@@ -537,17 +547,17 @@
     flex: 1;
     overflow-y: auto;
     padding-top: 10px;
-    padding-bottom: 30vh;
+    padding-bottom: 40vh;
   }
 
   .player-main h1 {
     font-size: 1.2em;
-    margin-bottom: 5px;
+     margin: 5px 0px 0px 0px;
   }
 
   .subtitle {
     font-size: 0.75em;
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
 
   .song-info h2 {
