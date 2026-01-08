@@ -29,7 +29,7 @@ onMounted(() => {
   initVisualizer()
   // Listen for page visibility changes
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  
+
   // If already playing when component mounts, start visualization
   if (props.isPlaying && props.audioElement) {
     console.log('Component mounted with music already playing, starting visualization')
@@ -44,25 +44,32 @@ onUnmounted(() => {
   cleanup()
 })
 
-watch(() => props.isPlaying, (isPlaying, oldValue) => {
-  console.log('isPlaying changed from', oldValue, 'to:', isPlaying)
-  if (isPlaying) {
-    startVisualization()
-  } else {
-    stopVisualization()
-  }
-}, { immediate: true })
+watch(
+  () => props.isPlaying,
+  (isPlaying, oldValue) => {
+    console.log('isPlaying changed from', oldValue, 'to:', isPlaying)
+    if (isPlaying) {
+      startVisualization()
+    } else {
+      stopVisualization()
+    }
+  },
+  { immediate: true },
+)
 
-watch(() => props.audioElement, (newAudio) => {
-  console.log('audioElement changed:', !!newAudio)
-  if (newAudio) {
-    setupAudioContext(newAudio)
-  }
-})
+watch(
+  () => props.audioElement,
+  (newAudio) => {
+    console.log('audioElement changed:', !!newAudio)
+    if (newAudio) {
+      setupAudioContext(newAudio)
+    }
+  },
+)
 
 function initVisualizer() {
   if (!canvas.value) return
-  
+
   const ctx = canvas.value.getContext('2d')
   if (!ctx) return
 
@@ -70,10 +77,10 @@ function initVisualizer() {
   setTimeout(() => {
     resizeCanvas()
   }, 100)
-  
+
   // Listen for resize events
   window.addEventListener('resize', resizeCanvas)
-  
+
   // Setup audio context when audio element is available
   if (props.audioElement) {
     setupAudioContext(props.audioElement)
@@ -82,24 +89,24 @@ function initVisualizer() {
 
 function resizeCanvas() {
   if (!canvas.value) return
-  
+
   const container = canvas.value.parentElement
   if (!container) return
-  
+
   // Force a minimum size
   const width = Math.max(container.clientWidth, 300)
   const height = Math.max(container.clientHeight, 150)
-  
+
   canvas.value.width = width
   canvas.value.height = height
-  
+
   console.log('Canvas resized to:', width, 'x', height)
 }
 
 function setupAudioContext(audioElement: HTMLAudioElement) {
   try {
     console.log('Setting up audio context...')
-    
+
     if (!audioContext) {
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
       console.log('Audio context created')
@@ -110,10 +117,10 @@ function setupAudioContext(audioElement: HTMLAudioElement) {
       source = audioContext.createMediaElementSource(audioElement)
       analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
-      
+
       const bufferLength = analyser.frequencyBinCount
       dataArray = new Uint8Array(new ArrayBuffer(bufferLength))
-      
+
       source.connect(analyser)
       analyser.connect(audioContext.destination)
       console.log('Audio context setup complete')
@@ -128,9 +135,9 @@ function startVisualization() {
   console.log('startVisualization called', {
     hasAudioContext: !!audioContext,
     isPlaying: props.isPlaying,
-    contextState: audioContext?.state
+    contextState: audioContext?.state,
   })
-  
+
   if (!audioContext || !props.isPlaying) return
 
   // Resume context if it was suspended by the browser
@@ -159,84 +166,84 @@ function draw() {
       canvas: !!canvas.value,
       analyser: !!analyser,
       dataArray: !!dataArray,
-      isPlaying: props.isPlaying
+      isPlaying: props.isPlaying,
     })
     return
   }
-  
+
   const ctx = canvas.value.getContext('2d')
   if (!ctx) return
-  
+
   animationFrame = requestAnimationFrame(draw)
-  
+
   // Get frequency data
   ;(analyser as any).getByteFrequencyData(dataArray)
-  
+
   // Clear canvas
   ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
-  
+
   // Draw waveform
   drawWaveform(ctx)
 }
 
 function drawWaveform(ctx: CanvasRenderingContext2D) {
   if (!canvas.value || !dataArray) return
-  
+
   const width = canvas.value.width
   const height = canvas.value.height
   const centerY = height / 2
-  
+
   // Create gradient
   const gradient = ctx.createLinearGradient(0, 0, width, 0)
   gradient.addColorStop(0, '#ff6b6b')
   gradient.addColorStop(0.3, '#4ecdc4')
   gradient.addColorStop(0.6, '#45b7d1')
   gradient.addColorStop(1, '#96ceb4')
-  
+
   ctx.fillStyle = gradient
   ctx.strokeStyle = gradient
-  
+
   const barWidth = width / dataArray.length
-  
+
   // Draw frequency bars
   for (let i = 0; i < dataArray.length; i++) {
     const barHeight = (dataArray[i] / 255) * height * 0.7
     const x = i * barWidth
-    
+
     // Draw bar from center expanding up and down
     ctx.fillRect(x, centerY - barHeight / 2, barWidth - 1, barHeight)
   }
-  
+
   // Draw additional wave effect
   drawSineWave(ctx, gradient)
 }
 
 function drawSineWave(ctx: CanvasRenderingContext2D, gradient: CanvasGradient) {
   if (!canvas.value || !dataArray) return
-  
+
   const width = canvas.value.width
   const height = canvas.value.height
   const centerY = height / 2
-  
+
   // Calculate average amplitude
   const average = dataArray.reduce((a, b) => a + b) / dataArray.length
   const amplitude = (average / 255) * 50
-  
+
   ctx.strokeStyle = gradient
   ctx.lineWidth = 3
   ctx.globalAlpha = 0.7
-  
+
   ctx.beginPath()
-  
+
   for (let x = 0; x < width; x++) {
-    const y = centerY + Math.sin((x * 0.02) + (Date.now() * 0.005)) * amplitude
+    const y = centerY + Math.sin(x * 0.02 + Date.now() * 0.005) * amplitude
     if (x === 0) {
       ctx.moveTo(x, y)
     } else {
       ctx.lineTo(x, y)
     }
   }
-  
+
   ctx.stroke()
   ctx.globalAlpha = 1
 }
@@ -276,16 +283,16 @@ function disconnectWebAudio() {
 function reconnectWebAudio() {
   try {
     if (!props.audioElement || !audioContext) return
-    
+
     // Create new source and analyser
     if (!source) {
       source = audioContext.createMediaElementSource(props.audioElement)
       analyser = audioContext.createAnalyser()
       analyser.fftSize = 256
-      
+
       const bufferLength = analyser.frequencyBinCount
       dataArray = new Uint8Array(new ArrayBuffer(bufferLength))
-      
+
       source.connect(analyser)
       analyser.connect(audioContext.destination)
     }
@@ -297,7 +304,7 @@ function reconnectWebAudio() {
 
 function cleanup() {
   stopVisualization()
-  
+
   if (source) {
     source.disconnect()
     source = null
@@ -310,7 +317,7 @@ function cleanup() {
     audioContext.close()
     audioContext = null
   }
-  
+
   window.removeEventListener('resize', resizeCanvas)
 }
 </script>

@@ -1,182 +1,193 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h } from 'vue';
-import { type Song } from './services/db';
-import { PlaylistService, type PlaylistWithSongs } from './services/playlist';
-import { PlaybackService } from './services/playback';
-import './styles/App.css';
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h } from 'vue'
+import { type Song } from './services/db'
+import { PlaylistService, type PlaylistWithSongs } from './services/playlist'
+import { PlaybackService } from './services/playback'
+import './styles/App.css'
 
 const AudioVisualizer = defineAsyncComponent({
   loader: () => import('./components/AudioVisualizer.vue'),
   errorComponent: { render: () => h('div') },
   delay: 200,
   timeout: 3000,
-});
+})
 
-const playlists = ref<PlaylistWithSongs[]>([]);
-const activePlaylistId = ref<number | null>(null);
-const currentSongIndex = ref(-1);
-const audioPlayer = ref<HTMLAudioElement | null>(null);
-const isPlaying = ref(false);
-const newPlaylistName = ref('');
-const fileInputRef = ref<HTMLInputElement | null>(null);
-const isAddingNewPlaylist = ref(false);
-const editingPlaylistId = ref<number | null>(null);
-const editingPlaylistName = ref('');
-const hideSongInfo = ref(false);
-const isHeaderCollapsed = ref(false);
-const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024);
-const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 768);
-const criticalError = ref<string | null>(null);
-const songAddError = ref<string | null>(null);
+const playlists = ref<PlaylistWithSongs[]>([])
+const activePlaylistId = ref<number | null>(null)
+const currentSongIndex = ref(-1)
+const audioPlayer = ref<HTMLAudioElement | null>(null)
+const isPlaying = ref(false)
+const newPlaylistName = ref('')
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const isAddingNewPlaylist = ref(false)
+const editingPlaylistId = ref<number | null>(null)
+const editingPlaylistName = ref('')
+const hideSongInfo = ref(false)
+const isHeaderCollapsed = ref(false)
+const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
+const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 768)
+const criticalError = ref<string | null>(null)
+const songAddError = ref<string | null>(null)
+const openPlaylistId = ref<number | null>(null)
 
+let songInfoHideTimer: number | null = null
+let isLoadingPlaylists = false
+let touchStartY = 0
+let touchStartTime = 0
+let isScrolling = false
+let hideDelayTimer: number | null = null
 
-let songInfoHideTimer: number | null = null;
-let isLoadingPlaylists = false;
-let touchStartY = 0;
-let touchStartTime = 0;
-let isScrolling = false;
-let hideDelayTimer: number | null = null;
-
-const playlistService = new PlaylistService();
-let playbackService: PlaybackService;
+const playlistService = new PlaylistService()
+let playbackService: PlaybackService
 const activeSongs = computed(() => {
-  if (!activePlaylistId.value) return [];
-  const activePlaylist = playlists.value.find(p => p.id === activePlaylistId.value);
-  return activePlaylist ? activePlaylist.songs : [];
-});
+  if (!activePlaylistId.value) return []
+  const activePlaylist = playlists.value.find((p) => p.id === activePlaylistId.value)
+  return activePlaylist ? activePlaylist.songs : []
+})
 
 const currentSong = computed(() => {
   return currentSongIndex.value > -1 && activeSongs.value[currentSongIndex.value]
     ? activeSongs.value[currentSongIndex.value]
-    : null;
-});
+    : null
+})
 
-const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450);
-const isDesktop = computed(() => windowWidth.value > 768);
+const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450)
+const isDesktop = computed(() => windowWidth.value > 768)
 
 onMounted(async () => {
   window.addEventListener('unhandledrejection', (event) => {
-    console.warn('Unhandled rejection:', event.reason);
-    event.preventDefault();
-  });
-  
+    console.warn('Unhandled rejection:', event.reason)
+    event.preventDefault()
+  })
+
   try {
-    await loadPlaylistsAndSongs();
-    
-    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs);
-    audioPlayer.value = playbackService.initialize();
-    
+    await loadPlaylistsAndSongs()
+    if (playlists.value.length > 0) {
+      openPlaylistId.value = playlists.value[0].id!
+    }
+
+    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs)
+    audioPlayer.value = playbackService.initialize()
+
     const handleResize = () => {
-      windowWidth.value = window.innerWidth;
-      windowHeight.value = window.innerHeight;
-    };
-    window.addEventListener('resize', handleResize);
-    (window as any).__resizeHandler = handleResize;
+      windowWidth.value = window.innerWidth
+      windowHeight.value = window.innerHeight
+    }
+    window.addEventListener('resize', handleResize)
+    ;(window as any).__resizeHandler = handleResize
   } catch (error: any) {
-    criticalError.value = error.message || 'Ocorreu um erro inesperado ao inicializar o player.';
-    audioPlayer.value = new Audio();
+    criticalError.value = error.message || 'Ocorreu um erro inesperado ao inicializar o player.'
+    audioPlayer.value = new Audio()
   }
-});
+})
 
 onUnmounted(() => {
-  clearSongInfoTimer();
+  clearSongInfoTimer()
   if (playbackService) {
-    playbackService.cleanup();
+    playbackService.cleanup()
   }
-  const handleResize = (window as any).__resizeHandler;
+  const handleResize = (window as any).__resizeHandler
   if (handleResize) {
-    window.removeEventListener('resize', handleResize);
+    window.removeEventListener('resize', handleResize)
   }
-});
+})
+
+function togglePlaylist(playlistId: number) {
+  if (openPlaylistId.value === playlistId) {
+    openPlaylistId.value = null
+  } else {
+    openPlaylistId.value = playlistId
+  }
+}
 
 async function loadPlaylistsAndSongs() {
-  if (isLoadingPlaylists) return;
-  
-  isLoadingPlaylists = true;
-  criticalError.value = null;
+  if (isLoadingPlaylists) return
+
+  isLoadingPlaylists = true
+  criticalError.value = null
   const safetyTimeout = setTimeout(() => {
-    isLoadingPlaylists = false;
-  }, 10000);
-  
+    isLoadingPlaylists = false
+  }, 10000)
+
   try {
-    playlists.value = await playlistService.loadPlaylistsAndSongs();
+    playlists.value = await playlistService.loadPlaylistsAndSongs()
     if (playlists.value.length > 0) {
-      activePlaylistId.value = playlists.value[0].id!;
+      activePlaylistId.value = playlists.value[0].id!
     }
   } catch (error: any) {
-    criticalError.value = error.message || 'Falha ao carregar playlists.';
-    throw error;
+    criticalError.value = error.message || 'Falha ao carregar playlists.'
+    throw error
   } finally {
-    clearTimeout(safetyTimeout);
-    isLoadingPlaylists = false;
+    clearTimeout(safetyTimeout)
+    isLoadingPlaylists = false
   }
 }
 
 function playSong(index: number, playlistId: number) {
   if (activePlaylistId.value !== playlistId) {
-    activePlaylistId.value = playlistId;
+    activePlaylistId.value = playlistId
   }
-  showSongInfoImmediately();
-  playbackService.playSong(index);
+  showSongInfoImmediately()
+  playbackService.playSong(index)
 }
 
 function togglePlayPause() {
-  playbackService.togglePlayPause();
+  playbackService.togglePlayPause()
 }
 
 function nextTrack() {
-  playbackService.nextTrack();
+  playbackService.nextTrack()
 }
 
 function prevTrack() {
-  playbackService.prevTrack();
+  playbackService.prevTrack()
 }
 
 async function addPlaylist() {
   if (newPlaylistName.value.trim()) {
-    await playlistService.addPlaylist(newPlaylistName.value);
-    newPlaylistName.value = '';
-    isAddingNewPlaylist.value = false;
-    await loadPlaylistsAndSongs();
+    await playlistService.addPlaylist(newPlaylistName.value)
+    newPlaylistName.value = ''
+    isAddingNewPlaylist.value = false
+    await loadPlaylistsAndSongs()
   }
 }
 
 function handleNewPlaylistBlur() {
   setTimeout(() => {
     if (newPlaylistName.value.trim() === '') {
-      isAddingNewPlaylist.value = false;
+      isAddingNewPlaylist.value = false
     }
-  }, 200);
+  }, 200)
 }
 
 function triggerFileInput(playlistId: number) {
-  activePlaylistId.value = playlistId;
-  fileInputRef.value?.click();
+  activePlaylistId.value = playlistId
+  fileInputRef.value?.click()
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
 }
 
 async function handleFileSelection(event: Event) {
-  const input = event.target as HTMLInputElement;
-  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return;
+  const input = event.target as HTMLInputElement
+  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return
 
-  const file = input.files[0];
+  const file = input.files[0]
   if (!file.type.startsWith('audio/')) {
-    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.';
-    input.value = '';
-    return;
+    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.'
+    input.value = ''
+    return
   }
 
   try {
-    songAddError.value = null;
-    const base64Data = await blobToBase64(file);
+    songAddError.value = null
+    const base64Data = await blobToBase64(file)
 
     const newSong: Omit<Song, 'id'> = {
       playlistId: activePlaylistId.value,
@@ -185,30 +196,30 @@ async function handleFileSelection(event: Event) {
       year: new Date().getFullYear().toString(),
       img: 'musica.png',
       data: base64Data,
-    };
+    }
 
-    await playlistService.addSong(newSong);
-    await loadPlaylistsAndSongs();
+    await playlistService.addSong(newSong)
+    await loadPlaylistsAndSongs()
   } catch (error: any) {
-    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.';
+    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.'
   }
-  input.value = '';
+  input.value = ''
 }
 
 async function deleteSong(songId: number, playlistId: number) {
   if (currentSong.value?.id === songId) {
-    nextTrack();
+    nextTrack()
   }
-  
-  await playlistService.deleteSong(songId);
-  
-  const playlist = playlists.value.find(p => p.id === playlistId);
+
+  await playlistService.deleteSong(songId)
+
+  const playlist = playlists.value.find((p) => p.id === playlistId)
   if (playlist) {
-    const songIndex = playlist.songs.findIndex(s => s.id === songId);
+    const songIndex = playlist.songs.findIndex((s) => s.id === songId)
     if (songIndex > -1) {
-      playlist.songs.splice(songIndex, 1);
+      playlist.songs.splice(songIndex, 1)
       if (currentSongIndex.value >= songIndex && activePlaylistId.value === playlistId) {
-        currentSongIndex.value--;
+        currentSongIndex.value--
       }
     }
   }
@@ -216,133 +227,137 @@ async function deleteSong(songId: number, playlistId: number) {
 
 async function deletePlaylist(playlistId: number) {
   if (window.confirm('Tem certeza que deseja apagar esta playlist e todas as suas músicas?')) {
-    await playlistService.deletePlaylist(playlistId);
-    await loadPlaylistsAndSongs();
+    await playlistService.deletePlaylist(playlistId)
+    await loadPlaylistsAndSongs()
   }
 }
 
 function startEditingPlaylist(playlist: PlaylistWithSongs) {
-  editingPlaylistId.value = playlist.id!;
-  editingPlaylistName.value = playlist.name;
+  editingPlaylistId.value = playlist.id!
+  editingPlaylistName.value = playlist.name
 }
 
 function cancelEditingPlaylist() {
-  editingPlaylistId.value = null;
-  editingPlaylistName.value = '';
+  editingPlaylistId.value = null
+  editingPlaylistName.value = ''
 }
 
 async function savePlaylistName(playlistId: number) {
   try {
-    const newName = editingPlaylistName.value.trim();
-    
+    const newName = editingPlaylistName.value.trim()
+
     if (!newName) {
-      cancelEditingPlaylist();
-      return;
+      cancelEditingPlaylist()
+      return
     }
-    
-    const playlist = playlists.value.find(p => p.id === playlistId);
+
+    const playlist = playlists.value.find((p) => p.id === playlistId)
     if (!playlist) {
-      cancelEditingPlaylist();
-      return;
+      cancelEditingPlaylist()
+      return
     }
-    
-    const success = await playlistService.updatePlaylistName(playlistId, newName);
+
+    const success = await playlistService.updatePlaylistName(playlistId, newName)
     if (success) {
-      playlist.name = newName;
+      playlist.name = newName
     }
   } catch (error: any) {
-    alert(error.message || 'Erro ao salvar nome da playlist.');
+    alert(error.message || 'Erro ao salvar nome da playlist.')
   }
-  
-  cancelEditingPlaylist();
+
+  cancelEditingPlaylist()
 }
 
 function handlePlaylistTouchStart(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return;
-  
+  if (!isSmallScreen.value) return
+
   // Don't track for buttons, inputs, or interactive elements
-  const target = event.target as HTMLElement;
-  if (target.closest('button') || 
-      target.closest('input') || 
-      target.closest('.add-playlist-trigger')) {
-    return;
+  const target = event.target as HTMLElement
+  if (
+    target.closest('button') ||
+    target.closest('input') ||
+    target.closest('.add-playlist-trigger')
+  ) {
+    return
   }
-  
+
   if (event instanceof TouchEvent && event.touches.length > 0) {
-    touchStartY = event.touches[0].clientY;
-    touchStartTime = Date.now();
-    isScrolling = false;
+    touchStartY = event.touches[0].clientY
+    touchStartTime = Date.now()
+    isScrolling = false
   }
-  
-  clearHideDelayTimer();
-  clearSongInfoTimer();
+
+  clearHideDelayTimer()
+  clearSongInfoTimer()
 }
 
 function handlePlaylistTouchMove(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return;
-  
+  if (!isSmallScreen.value) return
+
   if (event instanceof TouchEvent && event.touches.length > 0) {
-    const touchCurrentY = event.touches[0].clientY;
-    const deltaY = Math.abs(touchCurrentY - touchStartY);
-    
+    const touchCurrentY = event.touches[0].clientY
+    const deltaY = Math.abs(touchCurrentY - touchStartY)
+
     // If moved more than 10px, consider it scrolling
     if (deltaY > 10 && !isScrolling) {
-      isScrolling = true;
+      isScrolling = true
       // Add delay before hiding for smoother UX
       hideDelayTimer = setTimeout(() => {
-        hideSongInfo.value = true;
-      }, 150);
+        hideSongInfo.value = true
+      }, 150)
     }
   }
 }
 
 function handlePlaylistTouchEnd(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return;
-  
-  const target = event.target as HTMLElement;
-  if (target.closest('button') || 
-      target.closest('input') || 
-      target.closest('.add-playlist-trigger')) {
-    return;
+  if (!isSmallScreen.value) return
+
+  const target = event.target as HTMLElement
+  if (
+    target.closest('button') ||
+    target.closest('input') ||
+    target.closest('.add-playlist-trigger')
+  ) {
+    return
   }
-  
-  clearHideDelayTimer();
-  
+
+  clearHideDelayTimer()
+
   // Always reset scrolling state and show info after delay
   if (isScrolling) {
-    startSongInfoTimer();
-    isScrolling = false;
+    startSongInfoTimer()
+    isScrolling = false
   }
 }
 
 function clearHideDelayTimer() {
   if (hideDelayTimer) {
-    clearTimeout(hideDelayTimer);
-    hideDelayTimer = null;
+    clearTimeout(hideDelayTimer)
+    hideDelayTimer = null
   }
 }
 
 function startSongInfoTimer() {
-  clearSongInfoTimer();
+  clearSongInfoTimer()
   songInfoHideTimer = setTimeout(() => {
-    hideSongInfo.value = false;
-  }, 2000);
+    hideSongInfo.value = false
+  }, 2000)
 }
 
 function clearSongInfoTimer() {
   if (songInfoHideTimer) {
-    clearTimeout(songInfoHideTimer);
-    songInfoHideTimer = null;
+    clearTimeout(songInfoHideTimer)
+    songInfoHideTimer = null
   }
 }
 
 function showSongInfoImmediately() {
-  clearSongInfoTimer();
-  hideSongInfo.value = false;
+  clearSongInfoTimer()
+  hideSongInfo.value = false
 }
 
 function toggleHeaderCollapse() {
-  isHeaderCollapsed.value = !isHeaderCollapsed.value;
+  isHeaderCollapsed.value = !isHeaderCollapsed.value
 }
 </script>
 
@@ -351,116 +366,170 @@ function toggleHeaderCollapse() {
     <div v-if="criticalError" class="critical-error-banner">
       <h2>Erro Crítico</h2>
       <p>{{ criticalError }}</p>
-      <p>Isto pode acontecer se o navegador estiver em modo privado ou com restrições de armazenamento. Por favor, recarregue a página em uma janela normal.</p>
+      <p>
+        Isto pode acontecer se o navegador estiver em modo privado ou com restrições de
+        armazenamento. Por favor, recarregue a página em uma janela normal.
+      </p>
     </div>
-    
+
     <template v-else>
       <div class="player-main">
         <!-- Collapse toggle button for mobile -->
-        <button v-if="isSmallScreen" @click="toggleHeaderCollapse" class="collapse-toggle" :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'">
+        <button
+          v-if="isSmallScreen"
+          @click="toggleHeaderCollapse"
+          class="collapse-toggle"
+          :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
+        >
           {{ isHeaderCollapsed ? '∨' : '∧' }}
         </button>
-        
-        <h1 v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed" class="fade-element">Player de Música Offline</h1>
-        <p class="subtitle fade-element" v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed">Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.</p>
-        
+
+        <h1 v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed" class="fade-element">
+          Player de Música Offline
+        </h1>
+        <p
+          class="subtitle fade-element"
+          v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed"
+        >
+          Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
+        </p>
+
         <!-- Show visualizer only on desktop when music is playing -->
         <div v-if="isDesktop && currentSong" class="visualizer-container">
-          <AudioVisualizer 
-            :audio-element="audioPlayer" 
-            :is-playing="isPlaying" 
-          />
+          <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
         </div>
-        
-        <div class="song-info fade-element" v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed">
+
+        <div
+          class="song-info fade-element"
+          v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed"
+        >
           <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
           <p>{{ currentSong?.artist }}</p>
         </div>
 
         <div class="controls">
           <button @click="prevTrack" title="Anterior">⏪</button>
-          <button @click="togglePlayPause" class="play-pause-btn" :title="isPlaying ? 'Pausar' : 'Tocar'">
+          <button
+            @click="togglePlayPause"
+            class="play-pause-btn"
+            :title="isPlaying ? 'Pausar' : 'Tocar'"
+          >
             {{ isPlaying ? '⏸️' : '▶️' }}
           </button>
           <button @click="nextTrack" title="Próxima">⏩</button>
         </div>
       </div>
 
-      <div class="playlist-view" 
-          @touchstart="handlePlaylistTouchStart"
-          @touchmove="handlePlaylistTouchMove"
-          @touchend="handlePlaylistTouchEnd"
-          @mousedown="handlePlaylistTouchStart"
-          @mouseup="handlePlaylistTouchEnd">
+      <div
+        class="playlist-view"
+        @touchstart="handlePlaylistTouchStart"
+        @touchmove="handlePlaylistTouchMove"
+        @touchend="handlePlaylistTouchEnd"
+        @mousedown="handlePlaylistTouchStart"
+        @mouseup="handlePlaylistTouchEnd"
+      >
         <!-- New Playlist Form -->
         <div class="new-playlist-controls">
-          <span v-if="!isAddingNewPlaylist" @click="isAddingNewPlaylist = true" class="add-playlist-trigger">
-              + Criar nova playlist
+          <span
+            v-if="!isAddingNewPlaylist"
+            @click="isAddingNewPlaylist = true"
+            class="add-playlist-trigger"
+          >
+            + Criar nova playlist
           </span>
           <div v-if="isAddingNewPlaylist" class="add-playlist-input-group">
-              <input 
-                  type="text" 
-                  v-model="newPlaylistName" 
-                  @keyup.enter="addPlaylist" 
-                  @blur="handleNewPlaylistBlur"
-                  placeholder="Nome da nova playlist..."
-                  class="new-playlist-input"
-                  autofocus
-              >
-              <button @click="addPlaylist" class="add-playlist-btn" title="Criar playlist">+</button>
+            <input
+              type="text"
+              v-model="newPlaylistName"
+              @keyup.enter="addPlaylist"
+              @blur="handleNewPlaylistBlur"
+              placeholder="Nome da nova playlist..."
+              class="new-playlist-input"
+              autofocus
+            />
+            <button @click="addPlaylist" class="add-playlist-btn" title="Criar playlist">+</button>
           </div>
         </div>
 
         <!-- Hidden file input for all playlists -->
-        <input 
-            ref="fileInputRef"
-            type="file" 
-            accept="audio/mp3,audio/mpeg,audio/wav,audio/aac" 
-            @change="handleFileSelection" 
-            hidden 
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept="audio/mp3,audio/mpeg,audio/wav,audio/aac"
+          @change="handleFileSelection"
+          hidden
         />
 
         <!-- Loop through playlists -->
         <div v-for="playlist in playlists" :key="playlist.id" class="playlist-container">
-          <div class="playlist-header">
+          <div class="playlist-header" @click="togglePlaylist(playlist.id!)">
             <!-- Playlist name display/edit -->
             <div v-if="editingPlaylistId !== playlist.id" class="playlist-name-display">
-              <h2 @click="startEditingPlaylist(playlist)" class="editable-playlist-name" title="Clique para editar o nome">{{ playlist.name }}</h2>
+              <h2 class="editable-playlist-name">
+                <span class="playlist-toggle-icon">{{
+                  openPlaylistId === playlist.id ? '▾' : '▸'
+                }}</span>
+                <span @click.stop="startEditingPlaylist(playlist)"
+                title="Clique para editar o nome">{{ playlist.name }}</span>
+              </h2>
             </div>
             <div v-else class="playlist-name-edit">
-              <input 
-                type="text" 
-                v-model="editingPlaylistName" 
+              <input
+                type="text"
+                v-model="editingPlaylistName"
                 @keyup.enter="savePlaylistName(playlist.id!)"
                 @keyup.escape="cancelEditingPlaylist()"
                 @blur="savePlaylistName(playlist.id!)"
                 class="edit-playlist-input"
                 autofocus
+              />
+              <button
+                @click.stop="savePlaylistName(playlist.id!)"
+                class="save-playlist-btn"
+                title="Salvar"
               >
-              <button @click="savePlaylistName(playlist.id!)" class="save-playlist-btn" title="Salvar">✓</button>
-              <button @click="cancelEditingPlaylist()" class="cancel-playlist-btn" title="Cancelar">✕</button>
+                ✓
+              </button>
+              <button
+                @click.stop="cancelEditingPlaylist()"
+                class="cancel-playlist-btn"
+                title="Cancelar"
+              >
+                ✕
+              </button>
             </div>
-            
+
             <div class="playlist-actions">
-              <button @click="triggerFileInput(playlist.id!)" class="add-songs-btn">+ Adicionar Músicas</button>
-              <button @click="deletePlaylist(playlist.id!)" class="delete-playlist-btn">🗑️</button>
+              <button @click.stop="triggerFileInput(playlist.id!)" class="add-songs-btn">
+                + Adicionar Músicas
+              </button>
+              <button @click.stop="deletePlaylist(playlist.id!)" class="delete-playlist-btn">
+                🗑️
+              </button>
             </div>
           </div>
 
-          <ul class="song-list">
+          <ul class="song-list" v-show="openPlaylistId === playlist.id">
             <li v-if="playlist.songs.length === 0" class="empty-playlist">
               Esta playlist está vazia. Adicione algumas músicas para começar.
             </li>
-            <li v-for="(song, index) in playlist.songs" :key="song.id" @click="playSong(index, playlist.id!)" :class="{ 'active': currentSong?.id === song.id }">
+            <li
+              v-for="(song, index) in playlist.songs"
+              :key="song.id"
+              @click.stop="playSong(index, playlist.id!)"
+              :class="{ active: currentSong?.id === song.id }"
+            >
               <div class="song-details">
                 <span class="song-title">{{ song.title }}</span>
                 <span class="song-artist">{{ song.artist }}</span>
               </div>
-              <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">(x)</button>
+              <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">
+                (x)
+              </button>
             </li>
           </ul>
         </div>
-        
+
         <!-- Song Add Error Span -->
         <div v-if="songAddError" class="song-add-error">
           <span>{{ songAddError }}</span>
@@ -470,4 +539,3 @@ function toggleHeaderCollapse() {
     </template>
   </div>
 </template>
-
