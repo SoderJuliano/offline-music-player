@@ -54,8 +54,23 @@ const currentSong = computed(() => {
 const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450)
 const isDesktop = computed(() => windowWidth.value > 768)
 
-const loader = ref(null)
 const observer = ref<IntersectionObserver | null>(null)
+const loaderRefs = ref<Map<number, HTMLElement>>(new Map())
+
+const setLoaderRef = (el: any, playlistId: number) => {
+  if (el) {
+    loaderRefs.value.set(playlistId, el)
+    observer.value?.observe(el)
+  } else {
+    if (loaderRefs.value.has(playlistId)) {
+      const oldEl = loaderRefs.value.get(playlistId)
+      if (oldEl && observer.value) {
+        observer.value.unobserve(oldEl)
+      }
+      loaderRefs.value.delete(playlistId)
+    }
+  }
+}
 
 onMounted(async () => {
   window.addEventListener('unhandledrejection', (event) => {
@@ -88,7 +103,7 @@ onMounted(async () => {
         })
       },
       {
-        root: document.querySelector('.playlist-view'),
+        root: null, // Use the viewport as the root
         threshold: 0.1,
       },
     )
@@ -236,7 +251,7 @@ async function addPlaylist() {
     await loadPlaylists()
     // Open the new playlist
     const newPlaylist = playlists.value[playlists.value.length - 1]
-    if (newPlaylist) {
+    if (newPlaylist && newPlaylist.id !== undefined) {
       openPlaylistId.value = newPlaylist.id
     }
   }
@@ -609,7 +624,7 @@ function toggleHeaderCollapse() {
             </li>
             <li
               v-if="!playlist.allSongsLoaded && openPlaylistId === playlist.id"
-              ref="loader"
+              :ref="(el) => setLoaderRef(el, playlist.id!)"
               :data-playlist-id="playlist.id"
               class="loader-container"
             >
