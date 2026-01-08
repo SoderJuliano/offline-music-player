@@ -54,29 +54,50 @@ const currentSong = computed(() => {
 const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450)
 const isDesktop = computed(() => windowWidth.value > 768)
 
+const loader = ref(null)
+const observer = ref<IntersectionObserver | null>(null)
+
 onMounted(async () => {
   window.addEventListener('unhandledrejection', (event) => {
-    console.warn('Unhandled rejection:', event.reason);
-    event.preventDefault();
-  });
-  
+    console.warn('Unhandled rejection:', event.reason)
+    event.preventDefault()
+  })
+
   try {
-    await loadInitialData();
-    
-    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs);
-    audioPlayer.value = playbackService.initialize();
-    
+    await loadInitialData()
+
+    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs)
+    audioPlayer.value = playbackService.initialize()
+
     const handleResize = () => {
-      windowWidth.value = window.innerWidth;
-      windowHeight.value = window.innerHeight;
-    };
-    window.addEventListener('resize', handleResize);
-    (window as any).__resizeHandler = handleResize;
+      windowWidth.value = window.innerWidth
+      windowHeight.value = window.innerHeight
+    }
+    window.addEventListener('resize', handleResize)
+    ;(window as any).__resizeHandler = handleResize
+
+    observer.value = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const playlistId = parseInt(entry.target.getAttribute('data-playlist-id') || '0', 10)
+            if (playlistId) {
+              loadMoreSongs(playlistId)
+            }
+          }
+        })
+      },
+      {
+        root: document.querySelector('.playlist-view'),
+        threshold: 0.1,
+      },
+    )
   } catch (error: any) {
-    criticalError.value = error.message || 'Ocorreu um erro inesperado ao inicializar o player.';
-    audioPlayer.value = new Audio();
+    criticalError.value =
+      error.message || 'Ocorreu um erro inesperado ao inicializar o player.'
+    audioPlayer.value = new Audio()
   }
-});
+})
 
 onUnmounted(() => {
   clearSongInfoTimer()
@@ -87,64 +108,88 @@ onUnmounted(() => {
   if (handleResize) {
     window.removeEventListener('resize', handleResize)
   }
+  if (observer.value) {
+    observer.value.disconnect()
+  }
 })
 
 async function loadInitialData() {
-  if (isLoadingPlaylists) return;
-  
-  isLoadingPlaylists = true;
-  criticalError.value = null;
-  
+  if (isLoadingPlaylists) return
+
+  isLoadingPlaylists = true
+  criticalError.value = null
+
   try {
-    const loadedPlaylists = await playlistService.loadPlaylists();
-    playlists.value = loadedPlaylists.map(p => ({ ...p, songs: [] }));
-    
+    const loadedPlaylists = await playlistService.loadPlaylists()
+    playlists.value = loadedPlaylists.map((p) => ({
+      ...p,
+      songs: [],
+      offset: 0,
+      allSongsLoaded: false,
+      isLoadingMore: false,
+    }))
+
     if (playlists.value.length > 0) {
-      const firstPlaylistId = playlists.value[0].id!;
-      activePlaylistId.value = firstPlaylistId;
-      await loadSongsForPlaylist(firstPlaylistId);
+      const firstPlaylistId = playlists.value[0].id!
+      activePlaylistId.value = firstPlaylistId
+      openPlaylistId.value = firstPlaylistId
+      await loadMoreSongs(firstPlaylistId)
     }
   } catch (error: any) {
-    criticalError.value = error.message || 'Falha ao carregar playlists.';
-    throw error;
+    criticalError.value = error.message || 'Falha ao carregar playlists.'
+    throw error
   } finally {
-    isLoadingPlaylists = false;
+    isLoadingPlaylists = false
   }
 }
 
-async function loadSongsForPlaylist(playlistId: number) {
-  const playlist = playlists.value.find(p => p.id === playlistId);
-  if (!playlist) return;
+async function loadMoreSongs(playlistId: number) {
+  const playlist = playlists.value.find((p) => p.id === playlistId)
+  if (!playlist || playlist.isLoadingMore || playlist.allSongsLoaded) return
 
+  playlist.isLoadingMore = true
   try {
-    const songs = await playlistService.getSongsForPlaylist(playlistId);
-    playlist.songs = songs;
+    const newSongs = await playlistService.getSongsForPlaylist(playlistId, 5, playlist.offset)
+    playlist.songs.push(...newSongs)
+    playlist.offset += newSongs.length
+    if (newSongs.length < 5) {
+      playlist.allSongsLoaded = true
+    }
   } catch (error) {
-    console.error(`Falha ao carregar músicas para a playlist ${playlistId}.`, error);
+    console.error(`Falha ao carregar mais músicas para a playlist ${playlistId}.`, error)
+  } finally {
+    playlist.isLoadingMore = false
+  }
+}
+
+async function resetAndLoadSongs(playlistId: number) {
+  const playlist = playlists.value.find((p) => p.id === playlistId)
+  if (playlist) {
+    playlist.songs = []
+    playlist.offset = 0
+    playlist.allSongsLoaded = false
+    await loadMoreSongs(playlistId)
   }
 }
 
 function playSong(index: number, playlistId: number) {
   if (activePlaylistId.value !== playlistId) {
-    activePlaylistId.value = playlistId;
+    activePlaylistId.value = playlistId
   }
-  showSongInfoImmediately();
-  playbackService.playSong(index);
+  showSongInfoImmediately()
+  playbackService.playSong(index)
 }
 
 async function togglePlaylist(playlistId: number) {
-  const playlist = playlists.value.find(p => p.id === playlistId);
-  if (!playlist) return;
-
-  const isAlreadyOpen = openPlaylistId.value === playlistId;
+  const isAlreadyOpen = openPlaylistId.value === playlistId
 
   if (isAlreadyOpen) {
-    openPlaylistId.value = null;
+    openPlaylistId.value = null
   } else {
-    openPlaylistId.value = playlistId;
-    // Load songs only if they haven't been loaded yet.
-    if (playlist.songs.length === 0) {
-      await loadSongsForPlaylist(playlistId);
+    openPlaylistId.value = playlistId
+    const playlist = playlists.value.find((p) => p.id === playlistId)
+    if (playlist && playlist.offset === 0) {
+      await loadMoreSongs(playlistId)
     }
   }
 }
@@ -163,23 +208,37 @@ function prevTrack() {
 
 async function loadPlaylists() {
   try {
-    const loadedPlaylists = await playlistService.loadPlaylists();
-    // Preserve existing songs for playlists that are already loaded
-    playlists.value = loadedPlaylists.map(p => {
-      const existingPlaylist = playlists.value.find(ep => ep.id === p.id);
-      return { ...p, songs: existingPlaylist?.songs || [] };
-    });
+    const loadedPlaylists = await playlistService.loadPlaylists()
+    const newPlaylists = loadedPlaylists.map((p) => {
+      const existingPlaylist = playlists.value.find((ep) => ep.id === p.id)
+      if (existingPlaylist) {
+        return existingPlaylist // Preserve state if playlist already exists
+      }
+      return {
+        ...p,
+        songs: [],
+        offset: 0,
+        allSongsLoaded: false,
+        isLoadingMore: false,
+      }
+    })
+    playlists.value = newPlaylists
   } catch (error) {
-    console.error('Falha ao recarregar as playlists.', error);
+    console.error('Falha ao recarregar as playlists.', error)
   }
 }
 
 async function addPlaylist() {
   if (newPlaylistName.value.trim()) {
-    await playlistService.addPlaylist(newPlaylistName.value);
-    newPlaylistName.value = '';
-    isAddingNewPlaylist.value = false;
-    await loadPlaylists();
+    await playlistService.addPlaylist(newPlaylistName.value)
+    newPlaylistName.value = ''
+    isAddingNewPlaylist.value = false
+    await loadPlaylists()
+    // Open the new playlist
+    const newPlaylist = playlists.value[playlists.value.length - 1]
+    if (newPlaylist) {
+      openPlaylistId.value = newPlaylist.id
+    }
   }
 }
 
@@ -206,19 +265,19 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 async function handleFileSelection(event: Event) {
-  const input = event.target as HTMLInputElement;
-  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return;
+  const input = event.target as HTMLInputElement
+  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return
 
-  const file = input.files[0];
+  const file = input.files[0]
   if (!file.type.startsWith('audio/')) {
-    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.';
-    input.value = '';
-    return;
+    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.'
+    input.value = ''
+    return
   }
 
   try {
-    songAddError.value = null;
-    const base64Data = await blobToBase64(file);
+    songAddError.value = null
+    const base64Data = await blobToBase64(file)
 
     const newSong: Omit<Song, 'id'> = {
       playlistId: activePlaylistId.value,
@@ -227,29 +286,29 @@ async function handleFileSelection(event: Event) {
       year: new Date().getFullYear().toString(),
       img: 'musica.png',
       data: base64Data,
-    };
+    }
 
-    await playlistService.addSong(newSong);
-    await loadSongsForPlaylist(activePlaylistId.value);
+    await playlistService.addSong(newSong)
+    await resetAndLoadSongs(activePlaylistId.value)
   } catch (error: any) {
-    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.';
+    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.'
   }
-  input.value = '';
+  input.value = ''
 }
 
 async function deleteSong(songId: number, playlistId: number) {
   if (currentSong.value?.id === songId) {
-    nextTrack();
+    nextTrack()
   }
-  
-  await playlistService.deleteSong(songId);
-  await loadSongsForPlaylist(playlistId);
+
+  await playlistService.deleteSong(songId)
+  await resetAndLoadSongs(playlistId)
 }
 
 async function deletePlaylist(playlistId: number) {
   if (window.confirm('Tem certeza que deseja apagar esta playlist e todas as suas músicas?')) {
-    await playlistService.deletePlaylist(playlistId);
-    await loadPlaylists();
+    await playlistService.deletePlaylist(playlistId)
+    await loadPlaylists()
   }
 }
 
@@ -531,7 +590,7 @@ function toggleHeaderCollapse() {
           </div>
 
           <ul class="song-list" v-show="openPlaylistId === playlist.id">
-            <li v-if="playlist.songs.length === 0" class="empty-playlist">
+            <li v-if="playlist.songs.length === 0 && playlist.allSongsLoaded" class="empty-playlist">
               Esta playlist está vazia. Adicione algumas músicas para começar.
             </li>
             <li
@@ -547,6 +606,14 @@ function toggleHeaderCollapse() {
               <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">
                 (x)
               </button>
+            </li>
+            <li
+              v-if="!playlist.allSongsLoaded && openPlaylistId === playlist.id"
+              ref="loader"
+              :data-playlist-id="playlist.id"
+              class="loader-container"
+            >
+              <span v-if="playlist.isLoadingMore">Carregando...</span>
             </li>
           </ul>
         </div>

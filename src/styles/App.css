@@ -378,6 +378,16 @@
   background-color: rgba(255, 255, 255, 0.1);
 }
 
+.loader-container {
+  text-align: center;
+  padding: 10px;
+}
+
+.loader-container span {
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .song-list li.active {
   background-color: var(--primary-color);
   color: white;

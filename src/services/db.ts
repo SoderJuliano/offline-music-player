@@ -124,10 +124,33 @@ class DbService {
     return 0
   }
 
-  async getSongsByPlaylist(playlistId: number): Promise<Song[]> {
+  async getPlaylist(id: number): Promise<Playlist | undefined> {
     await this.openPromise
     try {
-      const songs = await this.db.songs.where({ playlistId }).toArray()
+      return await this.db.playlists.get(id)
+    } catch (error) {
+      console.error('Error getting playlist:', error)
+      return undefined
+    }
+  }
+
+  async getSongsByPlaylist(
+    playlistId: number,
+    limit?: number,
+    offset?: number,
+  ): Promise<Song[]> {
+    await this.openPromise
+    try {
+      let query = this.db.songs.where({ playlistId })
+
+      if (offset) {
+        query = query.offset(offset)
+      }
+      if (limit) {
+        query = query.limit(limit)
+      }
+
+      const songs = await query.toArray()
       // Filter out songs that might have null data from a failed migration
       return songs.filter((song) => song && typeof song.data === 'string' && song.data.length > 0)
     } catch (error) {

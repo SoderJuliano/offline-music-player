@@ -2,6 +2,9 @@ import { dbService, type Playlist, type Song } from './db'
 
 export interface PlaylistWithSongs extends Playlist {
   songs: Song[]
+  offset: number
+  allSongsLoaded: boolean
+  isLoadingMore: boolean
 }
 
 export class PlaylistService {
@@ -28,15 +31,19 @@ export class PlaylistService {
     }
   }
 
-  async getSongsForPlaylist(playlistId: number): Promise<Song[]> {
-    try {
-      let songs = await dbService.getSongsByPlaylist(playlistId)
-      return songs.filter((s) => s && s.id && s.title && s.data)
-    } catch (error) {
-      console.error(`Error loading songs for playlist ${playlistId}:`, error)
-      return []
-    }
+  async getSongsForPlaylist(
+  playlistId: number,
+  limit?: number,
+  offset?: number,
+): Promise<Song[]> {
+  try {
+    let songs = await dbService.getSongsByPlaylist(playlistId, limit, offset)
+    return songs.filter((s) => s && s.id && s.title && s.data)
+  } catch (error) {
+    console.error(`Error loading songs for playlist ${playlistId}:`, error)
+    return []
   }
+}
 
   async addPlaylist(name: string): Promise<void> {
     if (name.trim()) {
