@@ -510,8 +510,8 @@ function toggleHeaderCollapse() {
           Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
         </p>
 
-        <!-- Show visualizer only on desktop when music is playing -->
-        <div v-show="isDesktop && currentSong" class="visualizer-container">
+        <!-- Show visualizer only on desktop when music is playing. NEVER enable for mobile to avoid interfering with native audio playback. -->
+        <div v-if="isDesktop && currentSong" class="visualizer-container">
           <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
         </div>
 
