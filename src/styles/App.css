@@ -589,8 +589,7 @@
   }
 
   .subtitle {
-    font-size: 0.75em;
-    margin-bottom: 2px;
+    display: none;
   }
 
   .song-info h2 {
