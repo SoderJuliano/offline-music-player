@@ -250,57 +250,19 @@ function drawSineWave(ctx: CanvasRenderingContext2D, gradient: CanvasGradient) {
 
 function handleVisibilityChange() {
   if (document.hidden) {
-    // Page hidden - disconnect Web Audio API to allow native background playback
+    // Page is hidden, stop the visualization to save resources
     isPageVisible = false
     stopVisualization()
-    disconnectWebAudio()
   } else {
-    // Page visible - reconnect Web Audio API for visualization
+    // Page is visible, restart visualization if music is playing
     isPageVisible = true
-    if (props.isPlaying && props.audioElement) {
-      reconnectWebAudio()
+    if (props.isPlaying) {
       startVisualization()
     }
   }
 }
 
-function disconnectWebAudio() {
-  try {
-    if (source) {
-      source.disconnect()
-      source = null
-    }
-    if (analyser) {
-      analyser.disconnect()
-      analyser = null
-    }
-    // Keep audioContext alive but disconnected
-  } catch (error) {
-    console.error('Error disconnecting:', error)
-  }
-}
 
-function reconnectWebAudio() {
-  try {
-    if (!props.audioElement || !audioContext) return
-
-    // Create new source and analyser
-    if (!source) {
-      source = audioContext.createMediaElementSource(props.audioElement)
-      analyser = audioContext.createAnalyser()
-      analyser.fftSize = 256
-
-      const bufferLength = analyser.frequencyBinCount
-      dataArray = new Uint8Array(new ArrayBuffer(bufferLength))
-
-      source.connect(analyser)
-      analyser.connect(audioContext.destination)
-    }
-  } catch (error) {
-    // Audio element already connected - this is okay, audio will work without visualization
-    console.warn('Could not reconnect visualizer:', error)
-  }
-}
 
 function cleanup() {
   stopVisualization()

@@ -290,6 +290,10 @@ async function handleFileSelection(event: Event) {
     return
   }
 
+  // Preserve current song
+  const wasPlaying = isPlaying.value
+  const currentSongId = currentSong.value?.id
+
   try {
     songAddError.value = null
     const base64Data = await blobToBase64(file)
@@ -305,6 +309,23 @@ async function handleFileSelection(event: Event) {
 
     await playlistService.addSong(newSong)
     await resetAndLoadSongs(activePlaylistId.value)
+
+    // Restore playback state
+    if (currentSongId) {
+      const newIndex = activeSongs.value.findIndex((s) => s.id === currentSongId)
+      if (newIndex > -1) {
+        currentSongIndex.value = newIndex
+        if (wasPlaying && audioPlayer.value) {
+          // If it was playing, resume it. The src is already set.
+          if (audioPlayer.value.paused) {
+            audioPlayer.value.play()
+          }
+        }
+      } else {
+        // If the old song is gone for some reason, stop playback
+        playbackService.stop()
+      }
+    }
   } catch (error: any) {
     songAddError.value = error.message || 'Erro desconhecido ao adicionar música.'
   }
@@ -490,7 +511,7 @@ function toggleHeaderCollapse() {
         </p>
 
         <!-- Show visualizer only on desktop when music is playing -->
-        <div v-if="isDesktop && currentSong" class="visualizer-container">
+        <div v-show="isDesktop && currentSong" class="visualizer-container">
           <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
         </div>
 
