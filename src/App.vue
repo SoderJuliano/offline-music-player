@@ -56,30 +56,27 @@ const isDesktop = computed(() => windowWidth.value > 768)
 
 onMounted(async () => {
   window.addEventListener('unhandledrejection', (event) => {
-    console.warn('Unhandled rejection:', event.reason)
-    event.preventDefault()
-  })
-
+    console.warn('Unhandled rejection:', event.reason);
+    event.preventDefault();
+  });
+  
   try {
-    await loadPlaylistsAndSongs()
-    if (playlists.value.length > 0) {
-      openPlaylistId.value = playlists.value[0].id!
-    }
-
-    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs)
-    audioPlayer.value = playbackService.initialize()
-
+    await loadInitialData();
+    
+    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs);
+    audioPlayer.value = playbackService.initialize();
+    
     const handleResize = () => {
-      windowWidth.value = window.innerWidth
-      windowHeight.value = window.innerHeight
-    }
-    window.addEventListener('resize', handleResize)
-    ;(window as any).__resizeHandler = handleResize
+      windowWidth.value = window.innerWidth;
+      windowHeight.value = window.innerHeight;
+    };
+    window.addEventListener('resize', handleResize);
+    (window as any).__resizeHandler = handleResize;
   } catch (error: any) {
-    criticalError.value = error.message || 'Ocorreu um erro inesperado ao inicializar o player.'
-    audioPlayer.value = new Audio()
+    criticalError.value = error.message || 'Ocorreu um erro inesperado ao inicializar o player.';
+    audioPlayer.value = new Audio();
   }
-})
+});
 
 onUnmounted(() => {
   clearSongInfoTimer()
@@ -92,43 +89,64 @@ onUnmounted(() => {
   }
 })
 
-function togglePlaylist(playlistId: number) {
-  if (openPlaylistId.value === playlistId) {
-    openPlaylistId.value = null
-  } else {
-    openPlaylistId.value = playlistId
+async function loadInitialData() {
+  if (isLoadingPlaylists) return;
+  
+  isLoadingPlaylists = true;
+  criticalError.value = null;
+  
+  try {
+    const loadedPlaylists = await playlistService.loadPlaylists();
+    playlists.value = loadedPlaylists.map(p => ({ ...p, songs: [] }));
+    
+    if (playlists.value.length > 0) {
+      const firstPlaylistId = playlists.value[0].id!;
+      activePlaylistId.value = firstPlaylistId;
+      await loadSongsForPlaylist(firstPlaylistId);
+    }
+  } catch (error: any) {
+    criticalError.value = error.message || 'Falha ao carregar playlists.';
+    throw error;
+  } finally {
+    isLoadingPlaylists = false;
   }
 }
 
-async function loadPlaylistsAndSongs() {
-  if (isLoadingPlaylists) return
-
-  isLoadingPlaylists = true
-  criticalError.value = null
-  const safetyTimeout = setTimeout(() => {
-    isLoadingPlaylists = false
-  }, 10000)
+async function loadSongsForPlaylist(playlistId: number) {
+  const playlist = playlists.value.find(p => p.id === playlistId);
+  if (!playlist) return;
 
   try {
-    playlists.value = await playlistService.loadPlaylistsAndSongs()
-    if (playlists.value.length > 0) {
-      activePlaylistId.value = playlists.value[0].id!
-    }
-  } catch (error: any) {
-    criticalError.value = error.message || 'Falha ao carregar playlists.'
-    throw error
-  } finally {
-    clearTimeout(safetyTimeout)
-    isLoadingPlaylists = false
+    const songs = await playlistService.getSongsForPlaylist(playlistId);
+    playlist.songs = songs;
+  } catch (error) {
+    console.error(`Falha ao carregar músicas para a playlist ${playlistId}.`, error);
   }
 }
 
 function playSong(index: number, playlistId: number) {
   if (activePlaylistId.value !== playlistId) {
-    activePlaylistId.value = playlistId
+    activePlaylistId.value = playlistId;
   }
-  showSongInfoImmediately()
-  playbackService.playSong(index)
+  showSongInfoImmediately();
+  playbackService.playSong(index);
+}
+
+async function togglePlaylist(playlistId: number) {
+  const playlist = playlists.value.find(p => p.id === playlistId);
+  if (!playlist) return;
+
+  const isAlreadyOpen = openPlaylistId.value === playlistId;
+
+  if (isAlreadyOpen) {
+    openPlaylistId.value = null;
+  } else {
+    openPlaylistId.value = playlistId;
+    // Load songs only if they haven't been loaded yet.
+    if (playlist.songs.length === 0) {
+      await loadSongsForPlaylist(playlistId);
+    }
+  }
 }
 
 function togglePlayPause() {
@@ -143,12 +161,25 @@ function prevTrack() {
   playbackService.prevTrack()
 }
 
+async function loadPlaylists() {
+  try {
+    const loadedPlaylists = await playlistService.loadPlaylists();
+    // Preserve existing songs for playlists that are already loaded
+    playlists.value = loadedPlaylists.map(p => {
+      const existingPlaylist = playlists.value.find(ep => ep.id === p.id);
+      return { ...p, songs: existingPlaylist?.songs || [] };
+    });
+  } catch (error) {
+    console.error('Falha ao recarregar as playlists.', error);
+  }
+}
+
 async function addPlaylist() {
   if (newPlaylistName.value.trim()) {
-    await playlistService.addPlaylist(newPlaylistName.value)
-    newPlaylistName.value = ''
-    isAddingNewPlaylist.value = false
-    await loadPlaylistsAndSongs()
+    await playlistService.addPlaylist(newPlaylistName.value);
+    newPlaylistName.value = '';
+    isAddingNewPlaylist.value = false;
+    await loadPlaylists();
   }
 }
 
@@ -175,19 +206,19 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 async function handleFileSelection(event: Event) {
-  const input = event.target as HTMLInputElement
-  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return
+  const input = event.target as HTMLInputElement;
+  if (!input.files || input.files.length === 0 || !activePlaylistId.value) return;
 
-  const file = input.files[0]
+  const file = input.files[0];
   if (!file.type.startsWith('audio/')) {
-    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.'
-    input.value = ''
-    return
+    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.';
+    input.value = '';
+    return;
   }
 
   try {
-    songAddError.value = null
-    const base64Data = await blobToBase64(file)
+    songAddError.value = null;
+    const base64Data = await blobToBase64(file);
 
     const newSong: Omit<Song, 'id'> = {
       playlistId: activePlaylistId.value,
@@ -196,39 +227,29 @@ async function handleFileSelection(event: Event) {
       year: new Date().getFullYear().toString(),
       img: 'musica.png',
       data: base64Data,
-    }
+    };
 
-    await playlistService.addSong(newSong)
-    await loadPlaylistsAndSongs()
+    await playlistService.addSong(newSong);
+    await loadSongsForPlaylist(activePlaylistId.value);
   } catch (error: any) {
-    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.'
+    songAddError.value = error.message || 'Erro desconhecido ao adicionar música.';
   }
-  input.value = ''
+  input.value = '';
 }
 
 async function deleteSong(songId: number, playlistId: number) {
   if (currentSong.value?.id === songId) {
-    nextTrack()
+    nextTrack();
   }
-
-  await playlistService.deleteSong(songId)
-
-  const playlist = playlists.value.find((p) => p.id === playlistId)
-  if (playlist) {
-    const songIndex = playlist.songs.findIndex((s) => s.id === songId)
-    if (songIndex > -1) {
-      playlist.songs.splice(songIndex, 1)
-      if (currentSongIndex.value >= songIndex && activePlaylistId.value === playlistId) {
-        currentSongIndex.value--
-      }
-    }
-  }
+  
+  await playlistService.deleteSong(songId);
+  await loadSongsForPlaylist(playlistId);
 }
 
 async function deletePlaylist(playlistId: number) {
   if (window.confirm('Tem certeza que deseja apagar esta playlist e todas as suas músicas?')) {
-    await playlistService.deletePlaylist(playlistId)
-    await loadPlaylistsAndSongs()
+    await playlistService.deletePlaylist(playlistId);
+    await loadPlaylists();
   }
 }
 

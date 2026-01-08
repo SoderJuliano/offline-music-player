@@ -1,46 +1,40 @@
 import { dbService, type Playlist, type Song } from './db'
 
-export interface PlaylistWithSongs {
-  id: number
-  name: string
+export interface PlaylistWithSongs extends Playlist {
   songs: Song[]
 }
 
 export class PlaylistService {
-  async loadPlaylistsAndSongs(): Promise<PlaylistWithSongs[]> {
+  async loadPlaylists(): Promise<Playlist[]> {
     try {
-      const loadedPlaylists = await dbService.getPlaylists()
-      const playlistsWithSongs: PlaylistWithSongs[] = []
+      let loadedPlaylists = await dbService.getPlaylists()
 
       if (loadedPlaylists.length === 0) {
         const newId = await dbService.addPlaylist('Sua Playlist')
-        playlistsWithSongs.push({ id: newId, name: 'Sua Playlist', songs: [] })
-      } else {
-        for (const p of loadedPlaylists) {
-          if (!p || !p.id || typeof p.name !== 'string') {
-            continue
-          }
-
-          let songs: Song[] = []
-          try {
-            songs = await dbService.getSongsByPlaylist(p.id)
-            songs = songs.filter((s) => s && s.id && s.title && s.data)
-          } catch (error) {
-            songs = []
-          }
-
-          playlistsWithSongs.push({
-            id: p.id,
-            name: p.name.trim() || 'Playlist sem nome',
-            songs: songs,
-          })
+        const newPlaylist = await dbService.getPlaylist(newId);
+        if (newPlaylist) {
+          loadedPlaylists = [newPlaylist];
         }
       }
+      
+      return loadedPlaylists.map(p => ({
+        ...p,
+        name: p.name.trim() || 'Playlist sem nome'
+      }));
 
-      return playlistsWithSongs
     } catch (error) {
-      console.error('Critical error loading playlists and songs:', error)
+      console.error('Critical error loading playlists:', error)
       throw error
+    }
+  }
+
+  async getSongsForPlaylist(playlistId: number): Promise<Song[]> {
+    try {
+      let songs = await dbService.getSongsByPlaylist(playlistId)
+      return songs.filter((s) => s && s.id && s.title && s.data)
+    } catch (error) {
+      console.error(`Error loading songs for playlist ${playlistId}:`, error)
+      return []
     }
   }
 
