@@ -501,7 +501,7 @@ function toggleHeaderCollapse() {
         </button>
 
         <h1 v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed" class="fade-element">
-          Player de Música Offline
+          Player
         </h1>
         <p
           class="subtitle fade-element"
@@ -510,8 +510,12 @@ function toggleHeaderCollapse() {
           Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
         </p>
 
-        <!-- Show visualizer only on desktop when music is playing. NEVER enable for mobile to avoid interfering with native audio playback. -->
-        <div v-if="isDesktop && currentSong" class="visualizer-container">
+        <!-- 
+          Show visualizer only on desktop. 
+          It is always rendered (not using v-show or conditional currentSong) to prevent the component
+          from being destroyed and re-created, which causes a fatal audio context error.
+        -->
+        <div v-if="isDesktop" class="visualizer-container">
           <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
         </div>
 
@@ -520,7 +524,6 @@ function toggleHeaderCollapse() {
           v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed"
         >
           <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
-          <p>{{ currentSong?.artist }}</p>
         </div>
 
         <div class="controls">
@@ -636,8 +639,15 @@ function toggleHeaderCollapse() {
               :class="{ active: currentSong?.id === song.id }"
             >
               <div class="song-details">
-                <span class="song-title">{{ song.title }}</span>
-                <span class="song-artist">{{ song.artist }}</span>
+                <div style="display: flex;">
+                  <img v-if="currentSong?.id === song.id && isPlaying" src="./assets/onda-de-audio.apng" alt="Playing" class="playing-gif" />
+                  <div>
+                    <span class="song-title">
+                    {{ song.title }}
+                    </span>
+                    <p v-if="currentSong?.id !== song.id" class="song-artist">{{ song.artist }}</p>
+                  </div>
+                </div>
               </div>
               <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">
                 (x)
