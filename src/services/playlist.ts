@@ -8,6 +8,10 @@ export interface PlaylistWithSongs extends Playlist {
 }
 
 export class PlaylistService {
+  get db() {
+    return dbService;
+  }
+
   async loadPlaylists(): Promise<Playlist[]> {
     try {
       let loadedPlaylists = await dbService.getPlaylists()
@@ -90,6 +94,7 @@ export class PlaylistService {
     const result: PlaylistWithSongs[] = [];
     
     for (const playlist of playlists) {
+      if (!playlist.id) continue;
       const songs = await this.getSongsForPlaylist(playlist.id);
       result.push({
         ...playlist,
@@ -115,5 +120,16 @@ export class PlaylistService {
       allSongsLoaded: true,
       isLoadingMore: false
     };
+  }
+
+  async createPlaylistWithSongs(name: string, songs: Song[]): Promise<number> {
+    const playlistId = await this.addPlaylist(name);
+    for (const song of songs) {
+      await this.addSong({
+        ...song,
+        playlistId
+      });
+    }
+    return playlistId;
   }
 }

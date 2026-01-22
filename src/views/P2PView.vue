@@ -7,6 +7,24 @@
         Status: {{ connectedPeersCount > 0 ? `${connectedPeersCount} usuário(s) conectado(s)` : 'Buscando...' }}
       </p>
     </div>
+    
+    <!-- Lista de dispositivos -->
+    <div class="devices-list" v-if="connectedDevices.length > 0">
+      <h4>🌐 Dispositivos</h4>
+      <div class="device-item" 
+           v-for="device in connectedDevices" 
+           :key="device.id"
+           @click="focusOnDevice(device.id)"
+           :title="`Clique para focar em ${device.name}`">
+        <span class="device-icon-small">{{ device.icon }}</span>
+        <span class="device-name">{{ device.name }}</span>
+      </div>
+      <div class="device-item my-device">
+        <span class="device-icon-small">{{ localDeviceType === 'phone' ? '📱' : '💻' }}</span>
+        <span class="device-name">Você</span>
+      </div>
+    </div>
+    
     <!-- Debug overlay desabilitado para evitar travamentos -->
     <div v-if="cloneProgress.active" class="clone-overlay">
       <div class="clone-progress-card">
@@ -29,7 +47,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { p2pService } from '../services/p2p';
 import { PlaylistService } from '../services/playlist';
-
+import type { Song } from '@/services/db';
 // Basic device detection
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const localDeviceType = isMobile ? 'phone' : 'desktop';
@@ -48,6 +66,32 @@ export default defineComponent({
     const peerMarkers = new Map<string, L.Marker>();
     const playlistService = new PlaylistService();
     let locationInterval: any = null;
+    
+    // Lista de dispositivos conectados
+    const connectedDevices = ref<Array<{ id: string, name: string, icon: string }>>([]);
+    
+    const updateDevicesList = () => {
+      const devices: Array<{ id: string, name: string, icon: string }> = [];
+      peerMarkers.forEach((marker, peerId) => {
+        const iconHtml = (marker.options.icon as any)?.options?.html;
+        const icon = iconHtml === '📱' ? '📱' : '💻';
+        devices.push({
+          id: peerId,
+          name: peerId.substring(0, 8) + '...',
+          icon
+        });
+      });
+      connectedDevices.value = devices;
+    };
+    
+    const focusOnDevice = (peerId: string) => {
+      const marker = peerMarkers.get(peerId);
+      if (marker && map) {
+        const latLng = marker.getLatLng();
+        map.setView(latLng, 16);
+        marker.openPopup();
+      }
+    };
     
     // Debug logs visiveis na tela (DESABILITADO)
     const debugLogs = ref<string[]>([]);
@@ -76,6 +120,77 @@ export default defineComponent({
     // Buffer for receiving chunked songs
     const songChunksBuffer = new Map<string, { chunks: string[], totalChunks: number, metadata: any, processed?: boolean }>();
 
+    const addMyMarkerToMap = (location: { lat: number, lng: number }) => {
+      if (!map) return;
+      const myIcon = localDeviceType === 'phone' ? phoneIcon : desktopIcon;
+      const myMarker = L.marker(location, { 
+        icon: myIcon,
+        zIndexOffset: 1000 // Garantir que fique acima dos outros
+      }).addTo(map);
+      myMarker.bindPopup('👉 Você está aqui!').openPopup();
+      console.log('[P2PView] ✅ My marker added to map at', location);
+      return myMarker;
+    };
+
+    const requestGeolocation = (retryCount = 0): void => {
+      if (!('geolocation' in navigator)) {
+        console.warn('[P2PView] Geolocation not supported');
+        // Fallback: adicionar marker em localização padrão
+        const defaultLocation = { lat: -27.59, lng: -48.54 };
+        userLocation.value = defaultLocation;
+        addMyMarkerToMap(defaultLocation);
+        return;
+      }
+
+      addDebugLog('📍 Pedindo localização...');
+      console.log('[P2PView] Requesting geolocation... (attempt', retryCount + 1, ')');
+      
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          userLocation.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          addDebugLog(`✅ Localização obtida: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
+          console.log('[P2PView] Geolocation obtained:', userLocation.value);
+          map!.setView(userLocation.value, 15);
+          addMyMarkerToMap(userLocation.value);
+        }, 
+        (error) => {
+          console.error("[P2PView] Geolocation error:", error.message, error.code);
+          addDebugLog(`❌ Erro de localização: ${error.message}`);
+          
+          // Mostrar alerta ao usuário
+          if (retryCount === 0) {
+            if (error.code === 1) { // PERMISSION_DENIED
+              alert('⚠️ Permissão de localização negada.\n\nSeu dispositivo será mostrado em uma localização padrão.\n\nPara compartilhar sua localização real, permita o acesso nas configurações do navegador.');
+            } else if (error.code === 3) { // TIMEOUT
+              alert('⚠️ Tempo esgotado ao obter localização.\n\nVerifique sua conexão com GPS/internet.');
+            }
+          }
+          
+          // Adicionar marker em localização padrão mesmo com erro
+          const defaultLocation = { lat: -27.59, lng: -48.54 };
+          userLocation.value = defaultLocation;
+          if (map) {
+            map.setView(defaultLocation, 13);
+            addMyMarkerToMap(defaultLocation);
+          }
+          
+          // Retry uma vez se não for permissão negada
+          if (retryCount < 1 && error.code !== 1) {
+            console.log('[P2PView] Retrying geolocation in 3s...');
+            setTimeout(() => requestGeolocation(retryCount + 1), 3000);
+          }
+        }, 
+        {
+          enableHighAccuracy: false,
+          timeout: 10000, // Aumentado de 5s para 10s
+          maximumAge: 60000
+        }
+      );
+    };
+    
+    // Declarar dataHandler fora de onMounted para poder remover no onUnmounted
+    let dataHandler: ((peerId: string, data: any) => Promise<void>) | null = null;
+
     onMounted(async () => {
       addDebugLog('🗺️ Mapa montado');
       map = L.map('map').setView([-27.59, -48.54], 13);
@@ -83,29 +198,8 @@ export default defineComponent({
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       }).addTo(map);
 
-      if ('geolocation' in navigator) {
-        addDebugLog('📍 Pedindo localização...');
-        console.log('[P2PView] Requesting geolocation...');
-        navigator.geolocation.getCurrentPosition(pos => {
-          userLocation.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          addDebugLog(`✅ Localização obtida: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
-          console.log('[P2PView] Geolocation obtained:', userLocation.value);
-          map!.setView(userLocation.value, 15);
-          const myIcon = localDeviceType === 'phone' ? phoneIcon : desktopIcon;
-          const myMarker = L.marker(userLocation.value, { 
-            icon: myIcon,
-            zIndexOffset: 1000 // Garantir que fique acima dos outros
-          }).addTo(map!);
-          myMarker.bindPopup('👉 Você está aqui!').openPopup();
-          console.log('[P2PView] ✅ My marker added to map at', userLocation.value);
-        }, (error) => {
-            console.error("[P2PView] Geolocation error:", error.message);
-        }, {
-          enableHighAccuracy: false,
-          timeout: 5000,
-          maximumAge: 60000
-        });
-      }
+      // Solicitar geolocalização com retry
+      requestGeolocation();
 
       localUserId.value = p2pService.getLocalId();
       addDebugLog(`🆔 Meu ID: ${localUserId.value.substring(0, 8)}`);
@@ -114,45 +208,11 @@ export default defineComponent({
       connectedPeersCount.value = p2pService.getAllPeerIds().length;
       addDebugLog(`👥 Peers já conectados: ${connectedPeersCount.value}`);
 
-      // Configurar callbacks apenas para esta view (não reinicializar o serviço)
-      const originalOnConnect = p2pService.onConnect;
-      const originalOnDisconnect = p2pService.onDisconnect;
-      const originalOnData = p2pService.onData;
-
-      p2pService.onConnect = (peerId) => {
-        console.log('[P2PView] ✅ Peer connected:', peerId);
-        addDebugLog(`✅ Peer conectou: ${peerId.substring(0, 8)}`);
-        connectedPeersCount.value++;
-        
-        // Pedir localização do peer que acabou de conectar
-        addDebugLog(`📤 → ${peerId.substring(0, 8)}: request-location`);
-        p2pService.sendTo(peerId, { type: 'request-location' });
-        
-        // Chamar callback original do App.vue também
-        if (originalOnConnect) originalOnConnect(peerId);
-      };
-
-      p2pService.onDisconnect = (peerId) => {
-        connectedPeersCount.value = Math.max(0, connectedPeersCount.value - 1);
-        const marker = peerMarkers.get(peerId);
-        if (marker) {
-          marker.remove();
-          peerMarkers.delete(peerId);
-        }
-        // Chamar callback original do App.vue também
-        if (originalOnDisconnect) originalOnDisconnect(peerId);
-      };
-
-      p2pService.onData = async (peerId, data) => {
+      // Usar sistema de handlers em vez de sobrescrever callbacks
+      dataHandler = async (peerId: string, data: any) => {
         console.log('[P2PView] Received data from', peerId, ':', data.type);
         addDebugLog(`📨 ← ${peerId.substring(0, 8)}: ${data.type}`);
         
-        // Chamar callback original do App.vue PRIMEIRO
-        if (originalOnData) {
-          await originalOnData(peerId, data);
-        }
-        
-        // Depois processar no P2PView
         switch (data.type) {
           case 'location':
             addDebugLog(`📍 ← ${peerId.substring(0, 8)}: location`);
@@ -160,25 +220,8 @@ export default defineComponent({
             updateMarker(peerId, data.payload);
             console.log('[P2PView] ✅ Marker updated for', peerId, '- Total markers:', peerMarkers.size);
             break;
-          case 'request-playlists':
-            try {
-              const playlists = await playlistService.loadAllPlaylistsWithSongs();
-              // Send only basic info without songs to avoid overflow
-              const playlistsBasic = playlists.map(p => ({
-                id: p.id,
-                name: p.name,
-                songCount: p.songs.length
-              }));
-              p2pService.sendTo(peerId, { type: 'playlists-response', payload: { playlists: playlistsBasic } });
-            } catch (error) {
-              console.error('[P2PView] Error loading playlists:', error);
-            }
-            break;
           case 'playlists-response':
             showPlaylistsInPopup(peerId, data.payload.playlists);
-            break;
-          case 'request-clone':
-            await handleCloneRequest(peerId, data.payload.playlistId);
             break;
           case 'clone-start':
             // Criar nova playlist com nome formatado
@@ -226,6 +269,45 @@ export default defineComponent({
             songChunksBuffer.clear();
             break;
         }
+      };
+      
+      // Registrar handler
+      if ((p2pService as any).addDataHandler) {
+        (p2pService as any).addDataHandler(dataHandler);
+        console.log('[P2PView] ✅ Data handler registered successfully');
+        addDebugLog('✅ Handler registrado');
+      } else {
+        console.error('[P2PView] ❌ addDataHandler not available!');
+        addDebugLog('❌ addDataHandler não disponível!');
+      }
+      
+      // Guardar callbacks originais
+      const originalOnConnect = p2pService.onConnect;
+      const originalOnDisconnect = p2pService.onDisconnect;
+
+      p2pService.onConnect = (peerId) => {
+        console.log('[P2PView] ✅ Peer connected:', peerId);
+        addDebugLog(`✅ Peer conectou: ${peerId.substring(0, 8)}`);
+        connectedPeersCount.value++;
+        
+        // Pedir localização do peer que acabou de conectar
+        addDebugLog(`📤 → ${peerId.substring(0, 8)}: request-location`);
+        p2pService.sendTo(peerId, { type: 'request-location' });
+        
+        // Chamar callback original do App.vue também
+        if (originalOnConnect) originalOnConnect(peerId);
+      };
+
+      p2pService.onDisconnect = (peerId) => {
+        connectedPeersCount.value = Math.max(0, connectedPeersCount.value - 1);
+        const marker = peerMarkers.get(peerId);
+        if (marker) {
+          marker.remove();
+          peerMarkers.delete(peerId);
+          updateDevicesList();
+        }
+        // Chamar callback original do App.vue também
+        if (originalOnDisconnect) originalOnDisconnect(peerId);
       };
 
       // P2P já foi inicializado no App.vue, não precisa reinicializar
@@ -283,6 +365,11 @@ export default defineComponent({
     });
 
     onUnmounted(() => {
+      // Remover handler de dados
+      if ((p2pService as any).removeDataHandler) {
+        (p2pService as any).removeDataHandler(dataHandler);
+      }
+      
       // Limpar intervalo de localização
       if (locationInterval) {
         clearInterval(locationInterval);
@@ -320,6 +407,9 @@ export default defineComponent({
           .bindPopup(`<b>Dispositivo:</b> ${peerId.substring(0, 8)}...<br/><button onclick="requestPlaylists('${peerId}')">Ver Playlists</button>`);
         peerMarkers.set(peerId, marker);
       }
+      
+      // Atualizar lista de dispositivos
+      updateDevicesList();
     };
 
     const showPlaylistsInPopup = (peerId: string, playlists: any[]) => {
@@ -432,9 +522,11 @@ export default defineComponent({
         
         // Reconstruct song
         const fullData = buffer.chunks.join('');
-        const song = {
+        const song: Omit<Song, 'id'> = {
           title: buffer.metadata.title,
           artist: buffer.metadata.artist,
+          year: '',
+          img: '',
           album: buffer.metadata.album,
           duration: buffer.metadata.duration,
           playlistId: cloneProgress.value.newPlaylistId, // Use a nova playlist criada
@@ -500,7 +592,7 @@ export default defineComponent({
         alert(`Playlist "${newName}" clonada com sucesso! Volte para a tela do player para vê-la.`);
     };
 
-    return { connectedPeersCount, cloneProgress, debugLogs };
+    return { connectedPeersCount, cloneProgress, debugLogs, connectedDevices, focusOnDevice, localDeviceType };
   }
 });
 </script>
@@ -556,6 +648,108 @@ export default defineComponent({
 
 .status-overlay .connected {
   color: #86efac;
+}
+
+/* Lista de dispositivos */
+.devices-list {
+  position: fixed;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  color: white;
+  padding: 15px;
+  border-radius: 10px;
+  z-index: 1000;
+  max-height: 70vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.devices-list h4 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #86efac;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.device-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 5px 0;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.device-item:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateX(3px);
+}
+
+.device-item.my-device {
+  background: rgba(76, 175, 80, 0.2);
+  border: 1px solid rgba(76, 175, 80, 0.5);
+  cursor: default;
+}
+
+.device-item.my-device:hover {
+  transform: none;
+}
+
+.device-icon-small {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.device-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Desktop: lista na lateral direita */
+@media (min-width: 768px) {
+  .devices-list {
+    top: 80px;
+    right: 15px;
+    min-width: 200px;
+    max-width: 250px;
+  }
+}
+
+/* Mobile: lista no rodapé */
+@media (max-width: 767px) {
+  .devices-list {
+    bottom: 15px;
+    left: 15px;
+    right: 15px;
+    max-height: 120px;
+    padding: 10px;
+  }
+  
+  .devices-list h4 {
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  
+  .device-item {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  
+  .device-icon-small {
+    font-size: 16px;
+  }
+  
+  .device-name {
+    font-size: 11px;
+  }
 }
 
 .clone-overlay {

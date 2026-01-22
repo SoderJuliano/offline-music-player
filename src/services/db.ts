@@ -12,6 +12,8 @@ export interface Song {
   artist: string
   year: string
   img: string
+  album?: string
+  duration?: number
   data: string // Base64 Data URL
 }
 

@@ -6,7 +6,7 @@ const ABLY_CHANNEL_NAME = 'online-player-p2p-channel-v2';
 
 class P2PService {
   private ably: Ably.Realtime | null = null;
-  private channel: Ably.Types.RealtimeChannelPromise | null = null;
+  private channel: Ably.RealtimeChannel | null = null;
   private peers: Map<string, Peer.Instance> = new Map();
   private localId: string = `user_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -51,13 +51,13 @@ class P2PService {
       console.log('[P2P] Getting channel:', ABLY_CHANNEL_NAME);
       this.channel = this.ably.channels.get(ABLY_CHANNEL_NAME);
 
-      await this.channel.subscribe('signal', (message) => {
+      await this.channel.subscribe('signal', (message: Ably.Message) => {
         if (message.data.to === this.localId) {
           this.handleSignal(message.data);
         }
       });
 
-      this.channel.presence.subscribe('enter', (member) => {
+      this.channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
         console.log('[P2P] Peer entered:', member.clientId);
         if (member.clientId !== this.localId) {
           // Only initiate if our ID is greater (to avoid both peers initiating)
@@ -69,7 +69,7 @@ class P2PService {
         }
       });
 
-      this.channel.presence.subscribe('leave', (member) => {
+      this.channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
         const peer = this.peers.get(member.clientId);
         if (peer) {
           peer.destroy();
@@ -83,8 +83,8 @@ class P2PService {
       console.log('[P2P] Successfully entered presence');
       
       const existingMembers = await this.channel.presence.get();
-      console.log('[P2P] Existing members:', existingMembers.length, existingMembers.map(m => m.clientId));
-      existingMembers.forEach(member => {
+      console.log('[P2P] Existing members:', existingMembers.length, existingMembers.map((m: Ably.PresenceMessage) => m.clientId));
+      existingMembers.forEach((member: Ably.PresenceMessage) => {
         if (member.clientId !== this.localId) {
           // Only initiate if our ID is greater
           const shouldInitiate = this.localId > member.clientId;

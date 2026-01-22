@@ -15,7 +15,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { p2pService } from '../services/p2p';
 import { PlaylistService, type PlaylistWithSongs } from '../services/playlist';
-import { type Song } from '../services/db';
+import type { Song } from '../services/db';
 
 // Message Types
 interface P2PMessage {
@@ -183,18 +183,16 @@ export default defineComponent({
 
     const handlePlaylistCloneRequest = async (requestingPeerId: string, payload: any) => {
         const { playlistId, peerId } = payload;
-        const playlist = await playlistService.db.playlists.get(playlistId);
-        if (!playlist) return;
+        const playlistData = await playlistService.getPlaylistWithSongs(playlistId);
+        if (!playlistData) return;
 
-        const songs = await playlistService.getSongsForPlaylist(playlistId, Infinity, 0);
-        
         p2pService.sendTo(requestingPeerId, {
             type: 'clone-playlist-data',
             payload: {
                 from: localUserId.value,
                 peerId: peerId,
-                playlist,
-                songs
+                playlist: { id: playlistData.id, name: playlistData.name },
+                songs: playlistData.songs
             }
         });
     };
@@ -203,15 +201,17 @@ export default defineComponent({
         const { peerId, playlist, songs } = payload;
         const clonedPlaylistName = `[clonado de: ${peerId.substring(0,8)}] ${playlist.name}`;
         
-        const newPlaylistData = { ...playlist, name: clonedPlaylistName };
-        delete newPlaylistData.id;
-
-        const newPlaylistId = await playlistService.db.playlists.add(newPlaylistData as any);
+        const newPlaylistId = await playlistService.addPlaylist(clonedPlaylistName);
 
         for (const song of songs) {
-            const newSong: Omit<Song, 'id'> = { ...song, playlistId: newPlaylistId };
+            const newSong: Omit<Song, 'id'> = { 
+                ...song, 
+                playlistId: newPlaylistId,
+                year: song.year || '',
+                img: song.img || ''
+            };
             delete (newSong as any).id;
-            await playlistService.db.songs.add(newSong);
+            await playlistService.addSong(newSong);
         }
 
         console.log(`Playlist "${clonedPlaylistName}" was cloned successfully.`);

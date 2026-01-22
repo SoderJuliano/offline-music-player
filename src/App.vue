@@ -41,15 +41,19 @@ onMounted(async () => {
   
   // Quando conectar com novo peer, enviar localização
   p2pService.onConnect = (peerId) => {
-    console.log('[App] New peer connected, sending location');
+    console.log('[App] ✅ New peer connected:', peerId, '- sending location automatically');
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(pos => {
         const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        console.log('[App] 📤 Auto-sending location to new peer:', peerId, location);
         p2pService.sendTo(peerId, { 
           type: 'location', 
           payload: { ...location, device: deviceType } 
         });
-      }, null, {
+        console.log('[App] ✅ Auto-location sent to:', peerId);
+      }, (error) => {
+        console.error('[App] ❌ Geolocation error on connect:', error.message);
+      }, {
         enableHighAccuracy: false,
         timeout: 5000,
         maximumAge: 60000
@@ -57,21 +61,47 @@ onMounted(async () => {
     }
   };
   
+  // Sistema de broadcast de eventos para views
+  const dataHandlers: Array<(peerId: string, data: any) => Promise<void> | void> = [];
+  
+  (p2pService as any).addDataHandler = (handler: (peerId: string, data: any) => Promise<void> | void) => {
+    dataHandlers.push(handler);
+    console.log('[App] ✅ Data handler added, total handlers:', dataHandlers.length);
+  };
+  
+  (p2pService as any).removeDataHandler = (handler: (peerId: string, data: any) => Promise<void> | void) => {
+    const index = dataHandlers.indexOf(handler);
+    if (index > -1) dataHandlers.splice(index, 1);
+  };
+  
   // Responder a pedidos de localização e playlists
   p2pService.onData = async (peerId, data) => {
     console.log('[App] 📨 Received data:', data.type, 'from', peerId);
+    console.log('[App] Broadcasting to', dataHandlers.length, 'handler(s)');
+    
+    // Broadcast para todos os handlers registrados (P2PView, etc)
+    for (const handler of dataHandlers) {
+      try {
+        await handler(peerId, data);
+      } catch (error) {
+        console.error('[App] Error in data handler:', error);
+      }
+    }
     
     if (data.type === 'request-location') {
       console.log('[App] 📍 Peer', peerId, 'requested location, sending...');
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(pos => {
           const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          console.log('[App] 📤 Sending location to', peerId, ':', location);
+          console.log('[App] 📤 Sending location to', peerId, ':', location, 'device:', deviceType);
           p2pService.sendTo(peerId, { 
             type: 'location', 
             payload: { ...location, device: deviceType } 
           });
-        }, null, {
+          console.log('[App] ✅ Location sent successfully');
+        }, (error) => {
+          console.error('[App] ❌ Geolocation error:', error.message);
+        }, {
           enableHighAccuracy: false,
           timeout: 5000,
           maximumAge: 60000

@@ -35,7 +35,7 @@ let isLoadingPlaylists = false
 let touchStartY = 0
 let touchStartTime = 0
 let isScrolling = false
-let hideDelayTimer: number | null = null
+let hideDelayTimer: ReturnType<typeof setTimeout> | null = null
 
 const playlistService = new PlaylistService()
 let playbackService: PlaybackService
@@ -455,7 +455,7 @@ function clearHideDelayTimer() {
 
 function startSongInfoTimer() {
   clearSongInfoTimer()
-  songInfoHideTimer = setTimeout(() => {
+let songInfoHideTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
     hideSongInfo.value = false
   }, 2000)
 }
@@ -645,7 +645,7 @@ function toggleHeaderCollapse() {
             >
               <div class="song-details">
                 <div style="display: flex;">
-                  <img v-if="currentSong?.id === song.id && isPlaying" src="./assets/onda-de-audio.apng" alt="Playing" class="playing-gif" />
+                  <img v-if="currentSong?.id === song.id && isPlaying" src="../assets/onda-de-audio.apng" alt="Playing" class="playing-gif" />
                   <div>
                     <span class="song-title">
                     {{ song.title }}
