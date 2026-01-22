@@ -57,15 +57,25 @@ class P2PService {
         }
       });
 
+      // Fallback: request-based handshake to ensure new joiners initiate
+      await this.channel.subscribe('signal-request', (message: Ably.Message) => {
+        const { to, from } = message.data || {};
+        if (to === this.localId) {
+          if (!this.peers.has(from)) {
+            console.log('[P2P] 🔔 Received signal-request from', from, '- initiating connection');
+            this.createPeer(from, true);
+          } else {
+            console.log('[P2P] signal-request from', from, 'ignored - peer already exists');
+          }
+        }
+      });
+
       this.channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
         console.log('[P2P] Peer entered:', member.clientId);
         if (member.clientId !== this.localId) {
-          // Only initiate if our ID is greater (to avoid both peers initiating)
-          const shouldInitiate = this.localId > member.clientId;
-          console.log('[P2P] Should initiate with', member.clientId, '?', shouldInitiate);
-          if (shouldInitiate) {
-            this.createPeer(member.clientId, true);
-          }
+          // Ask the new peer to initiate if we haven't connected yet
+          console.log('[P2P] 📣 Sending signal-request to', member.clientId);
+          this.channel?.publish('signal-request', { to: member.clientId, from: this.localId });
         }
       });
 
@@ -86,11 +96,9 @@ class P2PService {
       console.log('[P2P] Existing members:', existingMembers.length, existingMembers.map((m: Ably.PresenceMessage) => m.clientId));
       existingMembers.forEach((member: Ably.PresenceMessage) => {
         if (member.clientId !== this.localId) {
-          // Only initiate if our ID is greater
-          const shouldInitiate = this.localId > member.clientId;
-          console.log('[P2P] Should initiate with existing member', member.clientId, '?', shouldInitiate);
-          if (shouldInitiate) {
-            console.log('[P2P] Creating peer for existing member:', member.clientId);
+          // Prefer the joining peer to initiate to all existing members
+          if (!this.peers.has(member.clientId)) {
+            console.log('[P2P] 🚀 Initiating to existing member:', member.clientId);
             this.createPeer(member.clientId, true);
           }
         }

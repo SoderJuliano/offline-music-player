@@ -162,7 +162,9 @@ export default defineComponent({
             if (error.code === 1) { // PERMISSION_DENIED
               alert('⚠️ Permissão de localização negada.\n\nSeu dispositivo será mostrado em uma localização padrão.\n\nPara compartilhar sua localização real, permita o acesso nas configurações do navegador.');
             } else if (error.code === 3) { // TIMEOUT
-              alert('⚠️ Tempo esgotado ao obter localização.\n\nVerifique sua conexão com GPS/internet.');
+              // Removido alerta de tempo esgotado para evitar interrupções na UI
+              console.warn('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
+              addDebugLog('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
             }
           }
           
