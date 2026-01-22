@@ -228,7 +228,19 @@
 }
 
 .playlist-container {
-  margin-bottom: 25px;
+  margin-bottom: 30px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+}
+
+.playlist-container:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .playlist-header {
@@ -236,6 +248,7 @@
   justify-content: space-between;
   align-items: center;
   cursor: pointer;
+  padding: 10px 5px;
 }
 
 .playlist-actions {
@@ -265,9 +278,10 @@
 
 .playlist-header h2 {
   margin: 0;
-  font-size: 1.8em;
+  font-size: 2em;
   display: flex;
   align-items: center;
+  font-weight: 600;
 }
 
 .playlist-toggle-icon {
@@ -522,11 +536,16 @@
     overflow-y: auto;
   }
 
+  .playlist-container {
+    padding: 18px;
+    margin-bottom: 25px;
+  }
+
   .playlist-header {
     flex-direction: column;
     align-items: stretch;
     gap: 1px;
-    padding: 15px;
+    padding: 10px 5px;
   }
 
   .song-title {

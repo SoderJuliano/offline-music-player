@@ -492,7 +492,7 @@ function toggleHeaderCollapse() {
       <div class="player-main">
         <!-- P2P Menu Button -->
         <router-link to="/mapa" class="p2p-menu-btn" title="Compartilhar P2P">
-          ☰
+          🗺️
         </router-link>
 
         <!-- Collapse toggle button for mobile -->
