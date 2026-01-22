@@ -45,10 +45,11 @@ export class PlaylistService {
   }
 }
 
-  async addPlaylist(name: string): Promise<void> {
+  async addPlaylist(name: string): Promise<number> {
     if (name.trim()) {
-      await dbService.addPlaylist(name.trim())
+      return await dbService.addPlaylist(name.trim());
     }
+    throw new Error('Nome da playlist não pode ser vazio');
   }
 
   async updatePlaylistName(playlistId: number, newName: string): Promise<boolean> {
@@ -82,5 +83,37 @@ export class PlaylistService {
 
   async deletePlaylist(playlistId: number): Promise<void> {
     await dbService.deletePlaylist(playlistId)
+  }
+
+  async loadAllPlaylistsWithSongs(): Promise<PlaylistWithSongs[]> {
+    const playlists = await this.loadPlaylists();
+    const result: PlaylistWithSongs[] = [];
+    
+    for (const playlist of playlists) {
+      const songs = await this.getSongsForPlaylist(playlist.id);
+      result.push({
+        ...playlist,
+        songs,
+        offset: 0,
+        allSongsLoaded: true,
+        isLoadingMore: false
+      });
+    }
+    
+    return result;
+  }
+
+  async getPlaylistWithSongs(playlistId: number): Promise<PlaylistWithSongs | null> {
+    const playlist = await dbService.getPlaylist(playlistId);
+    if (!playlist) return null;
+    
+    const songs = await this.getSongsForPlaylist(playlistId);
+    return {
+      ...playlist,
+      songs,
+      offset: 0,
+      allSongsLoaded: true,
+      isLoadingMore: false
+    };
   }
 }
