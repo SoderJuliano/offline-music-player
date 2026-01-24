@@ -72,9 +72,14 @@ export default defineComponent({
     
     const updateDevicesList = () => {
       const devices: Array<{ id: string, name: string, icon: string }> = [];
-      peerMarkers.forEach((marker, peerId) => {
-        const iconHtml = (marker.options.icon as any)?.options?.html;
-        const icon = iconHtml === '📱' ? '📱' : '💻';
+      const allPeerIds = p2pService.getAllPeerIds();
+      allPeerIds.forEach(peerId => {
+        const marker = peerMarkers.get(peerId);
+        let icon = '❔';
+        if (marker) {
+          const iconHtml = (marker.options.icon as any)?.options?.html;
+          icon = iconHtml === '📱' ? '📱' : '💻';
+        }
         devices.push({
           id: peerId,
           name: peerId.substring(0, 8) + '...',
@@ -225,6 +230,9 @@ export default defineComponent({
           case 'playlists-response':
             showPlaylistsInPopup(peerId, data.payload.playlists);
             break;
+          case 'playlist-songs-meta':
+            showSongsInPopup(peerId, data.payload.playlistId, data.payload.songs || [], data.payload.page || 1, data.payload.pageSize || 10, data.payload.total || (data.payload.songs || []).length);
+            break;
           case 'clone-start':
             // Criar nova playlist com nome formatado
             const newPlaylistName = `[${peerId.substring(0, 8)}] ${data.payload.playlistName}`;
@@ -281,6 +289,14 @@ export default defineComponent({
       } else {
         console.error('[P2PView] ❌ addDataHandler not available!');
         addDebugLog('❌ addDataHandler não disponível!');
+        // Tentar novamente após pequeno atraso (App.vue pode ainda estar inicializando)
+        setTimeout(() => {
+          if ((p2pService as any).addDataHandler) {
+            (p2pService as any).addDataHandler(dataHandler);
+            console.log('[P2PView] ✅ Data handler registered on retry');
+            addDebugLog('✅ Handler registrado (retry)');
+          }
+        }, 1000);
       }
       
       // Guardar callbacks originais
@@ -364,6 +380,19 @@ export default defineComponent({
       (window as any).clonePlaylistAction = async (peerId: string, playlistId: number) => {
         p2pService.sendTo(peerId, { type: 'request-clone', payload: { playlistId } });
       };
+
+      (window as any).viewPlaylistSongs = (peerId: string, playlistId: number) => {
+        p2pService.sendTo(peerId, { type: 'request-playlist-songs-meta', payload: { playlistId, page: 1, pageSize: 10 } });
+      };
+
+      (window as any).viewPlaylistSongsPage = (peerId: string, playlistId: number, page: number) => {
+        const safePage = Math.max(1, page);
+        p2pService.sendTo(peerId, { type: 'request-playlist-songs-meta', payload: { playlistId, page: safePage, pageSize: 10 } });
+      };
+
+      (window as any).cloneSingleSongAction = (peerId: string, playlistId: number, songIndex: number) => {
+        p2pService.sendTo(peerId, { type: 'request-song', payload: { playlistId, songIndex } });
+      };
     });
 
     onUnmounted(() => {
@@ -408,6 +437,14 @@ export default defineComponent({
           .addTo(map)
           .bindPopup(`<b>Dispositivo:</b> ${peerId.substring(0, 8)}...<br/><button onclick="requestPlaylists('${peerId}')">Ver Playlists</button>`);
         peerMarkers.set(peerId, marker);
+        // Ao abrir novamente o popup, solicitar a listagem de playlists
+        marker.on('popupopen', () => {
+          try {
+            p2pService.sendTo(peerId, { type: 'request-playlists' });
+          } catch (e) {
+            console.warn('[P2PView] Failed to request playlists on popupopen:', e);
+          }
+        });
       }
       
       // Atualizar lista de dispositivos
@@ -423,10 +460,46 @@ export default defineComponent({
         content += '<li>Nenhuma playlist encontrada.</li>';
       } else {
         playlists.forEach(p => {
-          content += `<li>${p.name} (${p.songCount} música${p.songCount !== 1 ? 's' : ''}) <button onclick="clonePlaylistAction('${peerId}', ${p.id})" style="font-size:11px;">Clonar</button></li>`;
+          const countLabel = `${p.songCount} música${p.songCount !== 1 ? 's' : ''}`;
+          if (p.songCount > 5) {
+            content += `<li>${p.name} (${countLabel}) <button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
+          } else {
+            content += `<li>${p.name} (${countLabel}) <button onclick="clonePlaylistAction('${peerId}', ${p.id})" style="font-size:11px;">Baixar playlist</button> <button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
+          }
         });
       }
       content += '</ul>';
+      marker.setPopupContent(content).openPopup();
+    };
+
+    const showSongsInPopup = (peerId: string, playlistId: number, songs: any[], page: number = 1, pageSize: number = 10, total: number = songs.length) => {
+      const marker = peerMarkers.get(peerId);
+      if (!marker) return;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      let content = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <button onclick="requestPlaylists('${peerId}')" style="font-size:11px;">← Voltar</button>
+        <span style="font-size:12px;"><b>Músicas</b> (página ${page}/${totalPages})</span>
+      </div><ul>`;
+      if (songs.length === 0) {
+        content += '<li>Nenhuma música encontrada.</li>';
+      } else {
+        songs.forEach((s: any, idx: number) => {
+          const title = s.title || `Música ${s.index+1}`;
+          const artist = s.artist || '';
+          const label = artist ? `${title} — ${artist}` : title;
+          const absoluteIndex = s.index ?? ((page-1) * pageSize + idx);
+          content += `<li>${label} <button onclick="cloneSingleSongAction('${peerId}', ${playlistId}, ${absoluteIndex})" style="font-size:11px;">Baixar</button></li>`;
+        });
+      }
+      content += '</ul>';
+      if (totalPages > 1) {
+        const prevDisabled = page <= 1 ? 'disabled' : '';
+        const nextDisabled = page >= totalPages ? 'disabled' : '';
+        content += `<div style="margin-top:8px;">
+          <button ${prevDisabled} onclick="viewPlaylistSongsPage('${peerId}', ${playlistId}, ${page - 1})" style="font-size:11px;">◀️ Anterior</button>
+          <button ${nextDisabled} onclick="viewPlaylistSongsPage('${peerId}', ${playlistId}, ${page + 1})" style="font-size:11px;">Próxima ▶️</button>
+        </div>`;
+      }
       marker.setPopupContent(content).openPopup();
     };
     
@@ -661,7 +734,7 @@ export default defineComponent({
   padding: 15px;
   border-radius: 10px;
   z-index: 1000;
-  max-height: 70vh;
+  max-height: 50vh;
   overflow-y: auto;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
@@ -731,8 +804,9 @@ export default defineComponent({
     bottom: 15px;
     left: 15px;
     right: 15px;
-    max-height: 120px;
+    max-height: 35vh;
     padding: 10px;
+    -webkit-overflow-scrolling: touch;
   }
   
   .devices-list h4 {
@@ -836,5 +910,12 @@ export default defineComponent({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Limit leaflet popup height on mobile and enable touch scrolling */
+.leaflet-popup-content {
+  max-height: 55vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 </style>

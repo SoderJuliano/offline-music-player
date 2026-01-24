@@ -49,6 +49,15 @@ export class PlaylistService {
   }
 }
 
+  async getPlaylistSongCount(playlistId: number): Promise<number> {
+    return await dbService.getSongCountForPlaylist(playlistId);
+  }
+
+  async getSongByIndex(playlistId: number, index: number): Promise<Song | null> {
+    const songs = await dbService.getSongsByPlaylist(playlistId, 1, index);
+    return songs[0] || null;
+  }
+
   async addPlaylist(name: string): Promise<number> {
     if (name.trim()) {
       return await dbService.addPlaylist(name.trim());

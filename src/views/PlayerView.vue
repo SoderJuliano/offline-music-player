@@ -475,6 +475,30 @@ function showSongInfoImmediately() {
 function toggleHeaderCollapse() {
   isHeaderCollapsed.value = !isHeaderCollapsed.value
 }
+
+// Custom confirm modal for deleting playlists (more reliable than window.confirm on mobile)
+const confirmDeletePlaylistId = ref<number | null>(null)
+const confirmDeletePlaylistName = ref<string>('')
+
+function promptDeletePlaylist(playlistId: number) {
+  const pl = playlists.value.find((p) => p.id === playlistId)
+  confirmDeletePlaylistId.value = playlistId
+  confirmDeletePlaylistName.value = pl?.name || ''
+}
+
+async function confirmDeletePlaylist() {
+  const id = confirmDeletePlaylistId.value
+  if (!id) return
+  await playlistService.deletePlaylist(id)
+  await loadPlaylists()
+  confirmDeletePlaylistId.value = null
+  confirmDeletePlaylistName.value = ''
+}
+
+function cancelDeletePlaylist() {
+  confirmDeletePlaylistId.value = null
+  confirmDeletePlaylistName.value = ''
+}
 </script>
 
 <template>
@@ -627,9 +651,7 @@ function toggleHeaderCollapse() {
               <button @click.stop="triggerFileInput(playlist.id!)" class="add-songs-btn">
                 + Adicionar Músicas
               </button>
-              <button @click.stop="deletePlaylist(playlist.id!)" class="delete-playlist-btn">
-                🗑️
-              </button>
+              <button @click.stop="promptDeletePlaylist(playlist.id!)" class="delete-playlist-btn" title="Remover playlist">✕</button>
             </div>
           </div>
 
@@ -676,5 +698,95 @@ function toggleHeaderCollapse() {
         </div>
       </div>
     </template>
+    <!-- Confirm Delete Modal -->
+    <div v-if="confirmDeletePlaylistId !== null" class="confirm-delete-overlay">
+      <div class="confirm-delete-card">
+        <h3 style="margin:0 0 8px 0;">Remover playlist</h3>
+        <p style="margin:0;">Tem certeza que deseja remover a playlist
+          <strong>{{ confirmDeletePlaylistName || 'esta playlist' }}</strong>?
+        </p>
+        <div class="confirm-delete-actions">
+          <button @click="confirmDeletePlaylist" class="confirm-btn">Remover</button>
+          <button @click="cancelDeletePlaylist" class="cancel-btn">Cancelar</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style>
+.playlist-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+/* Desktop: add spacing so delete ✕ and add-songs are not on top of each other */
+@media (min-width: 768px) {
+  .playlist-actions {
+    margin-right: 42px; /* room for top-right ✕ */
+  }
+}
+
+.playlist-header {
+  position: relative;
+}
+.delete-playlist-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.delete-playlist-btn:hover {
+  background: rgba(255, 80, 80, 0.2);
+  border-color: rgba(255, 80, 80, 0.5);
+}
+.confirm-delete-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-delete-card {
+  background: #1e1e1e;
+  color: #fff;
+  padding: 18px 20px;
+  border-radius: 10px;
+  width: 90%;
+  max-width: 360px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+}
+.confirm-delete-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.confirm-btn {
+  background: #ef4444;
+  border: none;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cancel-btn {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+</style>

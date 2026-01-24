@@ -30,6 +30,8 @@ Um player de música offline que funciona diretamente no seu navegador. Adicione
 - **Vite**: Build tool rápido e moderno
 - **Dexie.js**: Wrapper para IndexedDB
 - **Web Audio API**: Visualizador de áudio em tempo real
+- **Ably Realtime**: Sinalização P2P via WebSocket para WebRTC
+- **WebRTC**: Troca de dados P2P com STUN/TURN configuráveis
 
 ---
 
@@ -68,3 +70,52 @@ npm run type-check
 ## Recomendações de IDE
 
 [VSCode](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (desabilitar Vetur se estiver instalado).
+
+---
+
+## P2P em Produção (Netlify)
+
+Para que múltiplos usuários se vejam no mapa e troquem mensagens entre si em produção, esta app usa:
+
+- Ably Realtime (WebSocket) para sinalização entre pares (negociação WebRTC)
+- WebRTC com servidores STUN/TURN configuráveis para atravessar NAT
+
+### Variáveis de Ambiente (Netlify)
+
+Defina em Site settings → Environment variables:
+
+- `VITE_ABLY_API_KEY`: chave do Ably (formato `xxxx:yyyy`).
+- `VITE_ICE_SERVERS` (opcional): JSON com a lista de servidores ICE. Exemplo seguro (apenas STUN):
+
+```json
+[
+	{ "urls": "stun:stun.l.google.com:19302" },
+	{ "urls": "stun:global.stun.twilio.com:3478" }
+]
+```
+
+Para máxima compatibilidade em redes restritivas, adicione um provedor TURN (ex.: Twilio, Metered, Xirsys). Exemplo de formato (substitua pelas suas credenciais):
+
+```json
+[
+	{ "urls": "stun:stun.l.google.com:19302" },
+	{ "urls": "turn:turn.yourprovider.com:3478", "username": "USER", "credential": "PASS" },
+	{ "urls": "turns:turn.yourprovider.com:5349", "username": "USER", "credential": "PASS" }
+]
+```
+
+Observações:
+
+- Em hospedagens estáticas (Netlify), o Ably opera via WebSocket e faz o broadcast de presença, o que permite que cada novo usuário negocie P2P com todos os presentes.
+- Se `VITE_ICE_SERVERS` não for definido, o app usa STUNs públicos como padrão. Sem TURN, algumas redes podem não conseguir conectar P2P.
+
+### Deploy
+
+1. Configure as variáveis acima em Netlify.
+2. Faça o build localmente ou deixe o Netlify construir:
+
+```sh
+npm run build
+```
+
+3. Publique. A sinalização P2P usa WebSocket (forçado) e a presença via Ably para que o primeiro usuário receba os próximos que entrarem.

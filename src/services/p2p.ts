@@ -3,12 +3,15 @@ import * as Ably from 'ably';
 
 const ABLY_API_KEY = import.meta.env.VITE_ABLY_API_KEY;
 const ABLY_CHANNEL_NAME = 'online-player-p2p-channel-v2';
+// Optional: override ICE servers via env (JSON string)
+const ICE_SERVERS_ENV = import.meta.env.VITE_ICE_SERVERS;
 
 class P2PService {
   private ably: Ably.Realtime | null = null;
   private channel: Ably.RealtimeChannel | null = null;
   private peers: Map<string, Peer.Instance> = new Map();
   private localId: string = `user_${Math.random().toString(36).substr(2, 9)}`;
+  private onlineIds: Set<string> = new Set();
 
   public onConnect: ((peerId: string) => void) | null = null;
   public onData: ((peerId: string, data: any) => void) | null = null;
@@ -31,7 +34,11 @@ class P2PService {
 
     try {
       console.log('[P2P] Creating Ably client with ID:', this.localId);
-      this.ably = new Ably.Realtime({ key: ABLY_API_KEY, clientId: this.localId });
+      // Let Ably choose the best transport (WebSocket / fallback) for Safari reliability
+      this.ably = new Ably.Realtime({
+        key: ABLY_API_KEY,
+        clientId: this.localId,
+      });
       
       // Log de estado da conexão Ably
       this.ably.connection.on('connected', () => {
@@ -50,36 +57,49 @@ class P2PService {
       
       console.log('[P2P] Getting channel:', ABLY_CHANNEL_NAME);
       this.channel = this.ably.channels.get(ABLY_CHANNEL_NAME);
+      // Ensure channel is attached before presence & subscriptions
+      await this.channel.attach();
 
-      await this.channel.subscribe('signal', (message: Ably.Message) => {
+      this.channel.subscribe('signal', (message: Ably.Message) => {
         if (message.data.to === this.localId) {
           this.handleSignal(message.data);
         }
       });
 
-      // Fallback: request-based handshake to ensure new joiners initiate
-      await this.channel.subscribe('signal-request', (message: Ably.Message) => {
-        const { to, from } = message.data || {};
-        if (to === this.localId) {
-          if (!this.peers.has(from)) {
-            console.log('[P2P] 🔔 Received signal-request from', from, '- initiating connection');
-            this.createPeer(from, true);
-          } else {
-            console.log('[P2P] signal-request from', from, 'ignored - peer already exists');
-          }
-        }
+      // Ably direct data (unicast) fallback
+      this.channel.subscribe('data', (message: Ably.Message) => {
+        const { to, from, payload } = message.data || {};
+        if (!to || !from) return;
+        if (to !== this.localId) return;
+        if (from === this.localId) return;
+        console.log('[P2P] 📦 Ably data (direct) from', from);
+        if (this.onData) this.onData(from, payload);
+      });
+
+      // Ably broadcast fallback
+      this.channel.subscribe('broadcast', (message: Ably.Message) => {
+        const { from, payload } = message.data || {};
+        if (!from || from === this.localId) return;
+        console.log('[P2P] 📡 Ably broadcast from', from);
+        if (this.onData) this.onData(from, payload);
       });
 
       this.channel.presence.subscribe('enter', (member: Ably.PresenceMessage) => {
         console.log('[P2P] Peer entered:', member.clientId);
         if (member.clientId !== this.localId) {
-          // Ask the new peer to initiate if we haven't connected yet
-          console.log('[P2P] 📣 Sending signal-request to', member.clientId);
-          this.channel?.publish('signal-request', { to: member.clientId, from: this.localId });
+          this.onlineIds.add(member.clientId);
+          // Deterministic initiator to avoid glare: higher ID initiates
+          const initiator = this.localId > member.clientId;
+          if (!this.peers.has(member.clientId)) {
+            console.log('[P2P] 🤝 Creating peer on enter with', member.clientId, 'initiator:', initiator);
+            this.createPeer(member.clientId, initiator);
+          }
         }
       });
 
       this.channel.presence.subscribe('leave', (member: Ably.PresenceMessage) => {
+        console.log('[P2P] Peer left:', member.clientId);
+        this.onlineIds.delete(member.clientId);
         const peer = this.peers.get(member.clientId);
         if (peer) {
           peer.destroy();
@@ -89,22 +109,54 @@ class P2PService {
       });
 
       console.log('[P2P] Entering presence...');
-      await this.channel.presence.enter();
+      await this.channel.presence.enter({ joinedAt: Date.now() });
       console.log('[P2P] Successfully entered presence');
       
       const existingMembers = await this.channel.presence.get();
       console.log('[P2P] Existing members:', existingMembers.length, existingMembers.map((m: Ably.PresenceMessage) => m.clientId));
       existingMembers.forEach((member: Ably.PresenceMessage) => {
         if (member.clientId !== this.localId) {
-          // Prefer the joining peer to initiate to all existing members
+          this.onlineIds.add(member.clientId);
+          const initiator = this.localId > member.clientId;
           if (!this.peers.has(member.clientId)) {
-            console.log('[P2P] 🚀 Initiating to existing member:', member.clientId);
-            this.createPeer(member.clientId, true);
+            console.log('[P2P] 🔧 Creating peer for existing member:', member.clientId, 'initiator:', initiator);
+            this.createPeer(member.clientId, initiator);
           }
         }
       });
 
       console.log('[P2P] ✅ P2P Service initialized successfully');
+
+      // Periodic presence refresh to keep onlineIds synced (helps Safari if events are missed)
+      try {
+        const refresh = async () => {
+          if (!this.channel) return;
+          try {
+            const members = await this.channel.presence.get();
+            const ids = new Set<string>();
+            members.forEach((m: Ably.PresenceMessage) => {
+              if (m.clientId !== this.localId) ids.add(m.clientId);
+            });
+            // Update onlineIds set
+            this.onlineIds = ids;
+            // Ensure peers exist for current members
+            ids.forEach((id) => {
+              if (!this.peers.has(id)) {
+                const initiator = this.localId > id;
+                console.log('[P2P] 🔄 Presence refresh: creating peer for', id, 'initiator:', initiator);
+                this.createPeer(id, initiator);
+              }
+            });
+          } catch (e) {
+            console.warn('[P2P] Presence refresh failed:', e);
+          }
+        };
+        // Initial refresh and then periodic
+        await refresh();
+        (this as any)._presenceInterval = setInterval(refresh, 10000);
+      } catch (e) {
+        console.warn('[P2P] Failed to start presence refresh loop:', e);
+      }
     } catch (error: any) {
       console.error('[P2P] ❌ Error initializing P2P service:', error);
       if (this.onError) this.onError(error);
@@ -116,14 +168,18 @@ class P2PService {
     console.log('[P2P] Received signal from', peerId, 'type:', signal.type);
     const peer = this.peers.get(peerId);
 
-    if (signal.type === 'offer') {
-      console.log('[P2P] Received offer, creating peer as answerer');
-      this.createPeer(peerId, false, signal);
-    } else if (peer) {
+    if (peer) {
+      // Always feed any incoming signal to existing peer (offer/answer/candidate)
       console.log('[P2P] Forwarding signal to existing peer');
-      peer.signal(signal);
+      try { peer.signal(signal); } catch (e) { console.error('[P2P] signal error:', e); }
+      return;
+    }
+
+    if (signal?.type === 'offer') {
+      console.log('[P2P] No peer yet, creating as answerer');
+      this.createPeer(peerId, false, signal);
     } else {
-      console.warn('[P2P] Received signal but peer does not exist:', peerId);
+      console.warn('[P2P] No peer exists to handle signal of type', signal?.type, 'from', peerId);
     }
   }
 
@@ -134,14 +190,25 @@ class P2PService {
       return;
     }
 
+    // Resolve ICE servers: env override or sensible defaults
+    let iceServers: RTCIceServer[] = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+    ];
+    if (ICE_SERVERS_ENV) {
+      try {
+        const parsed = JSON.parse(ICE_SERVERS_ENV);
+        if (Array.isArray(parsed)) iceServers = parsed;
+      } catch (e) {
+        console.warn('[P2P] Failed to parse VITE_ICE_SERVERS, using defaults');
+      }
+    }
+
     const peer = new Peer({
       initiator,
       trickle: true,
       config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:global.stun.twilio.com:3478' }
-        ]
+        iceServers
       }
     });
 
@@ -193,7 +260,32 @@ class P2PService {
     if (peer?.connected) {
       peer.send(JSON.stringify(data));
     } else {
-      console.warn('[P2P] Cannot send to', peerId, '- peer not connected');
+      console.warn('[P2P] ↘️ Using Ably fallback to', peerId, 'type:', data?.type || 'data');
+      this.channel?.publish('data', { to: peerId, from: this.localId, payload: data });
+    }
+  }
+
+  // Broadcast message to all peers via Ably (fallback-friendly)
+  public broadcast(data: any): void {
+    if (!this.channel) {
+      console.warn('[P2P] Cannot broadcast, channel not ready');
+      return;
+    }
+    console.log('[P2P] 📣 Broadcasting', data?.type || 'data');
+    this.channel.publish('broadcast', { from: this.localId, payload: data });
+  }
+
+  // Register data handler without relying on external injection
+  public addDataHandler(handler: (peerId: string, data: any) => void): void {
+    this.onData = handler;
+    console.log('[P2P] ✅ Data handler registered');
+  }
+
+  // Optional: remove handler if it matches current one
+  public removeDataHandler(handler: (peerId: string, data: any) => void): void {
+    if (this.onData === handler) {
+      this.onData = null;
+      console.log('[P2P] 🗑️ Data handler removed');
     }
   }
 
@@ -201,8 +293,21 @@ class P2PService {
     return this.localId;
   }
   
+  public getOnlinePeerIds(): string[] {
+    return Array.from(this.onlineIds).filter(id => id !== this.localId);
+  }
+
   public getAllPeerIds(): string[] {
-    return Array.from(this.peers.keys());
+    const webrtc = Array.from(this.peers.keys());
+    const presence = this.getOnlinePeerIds();
+    const set = new Set<string>([...webrtc, ...presence]);
+    return Array.from(set);
+  }
+
+  // Check if a direct WebRTC data channel is established with a peer
+  public isDirectConnected(peerId: string): boolean {
+    const peer = this.peers.get(peerId);
+    return !!(peer && peer.connected);
   }
   
   public async destroy(): Promise<void> {
@@ -210,6 +315,11 @@ class P2PService {
     await this.ably?.close();
     this.peers.forEach(p => p.destroy());
     this.peers.clear();
+    this.onlineIds.clear();
+    if ((this as any)._presenceInterval) {
+      clearInterval((this as any)._presenceInterval);
+      (this as any)._presenceInterval = null;
+    }
   }
 }
 

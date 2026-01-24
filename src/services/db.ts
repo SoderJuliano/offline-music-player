@@ -191,6 +191,17 @@ class DbService {
       await this.db.playlists.delete(playlistId)
     })
   }
+
+  async getSongCountForPlaylist(playlistId: number): Promise<number> {
+    await this.openPromise
+    try {
+      // Efficient count without loading full song data
+      return await this.db.songs.where('playlistId').equals(playlistId).count()
+    } catch (error) {
+      console.error('Error counting songs for playlist:', playlistId, error)
+      return 0
+    }
+  }
 }
 
 export const dbService = new DbService()
