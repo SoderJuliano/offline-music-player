@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h } from 'vue'
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h, watch } from 'vue'
 import { type Song } from '../services/db'
 import { PlaylistService, type PlaylistWithSongs } from '../services/playlist'
 import { PlaybackService } from '../services/playback'
@@ -39,6 +39,7 @@ let hideDelayTimer: ReturnType<typeof setTimeout> | null = null
 
 const playlistService = new PlaylistService()
 let playbackService: PlaybackService
+let isPrefetchingMore = false
 const activeSongs = computed(() => {
   if (!activePlaylistId.value) return []
   const activePlaylist = playlists.value.find((p) => p.id === activePlaylistId.value)
@@ -214,12 +215,42 @@ async function ensureMoreSongsForPlayback() {
   }
 }
 
+async function prefetchMoreSongsIfNeeded() {
+  const playlistId = activePlaylistId.value
+  if (!playlistId) return
+
+  const playlist = playlists.value.find((p) => p.id === playlistId)
+  if (!playlist || playlist.isLoadingMore || playlist.allSongsLoaded || isPrefetchingMore) return
+
+  if (playlist.totalSongsCount === 0) {
+    playlist.totalSongsCount = await playlistService.getPlaylistSize(playlistId)
+  }
+
+  const remaining = playlist.songs.length - (currentSongIndex.value + 1)
+  if (playlist.songs.length < playlist.totalSongsCount && remaining <= 1) {
+    isPrefetchingMore = true
+    try {
+      await loadMoreSongs(playlistId)
+    } finally {
+      isPrefetchingMore = false
+    }
+  }
+}
+
+watch(
+  () => currentSongIndex.value,
+  () => {
+    void prefetchMoreSongsIfNeeded()
+  },
+)
+
 function playSong(index: number, playlistId: number) {
   if (activePlaylistId.value !== playlistId) {
     activePlaylistId.value = playlistId
   }
   showSongInfoImmediately()
   playbackService.playSong(index)
+  void prefetchMoreSongsIfNeeded()
 }
 
 async function togglePlaylist(playlistId: number) {
