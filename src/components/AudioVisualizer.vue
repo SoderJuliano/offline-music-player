@@ -21,6 +21,7 @@ let analyser: AnalyserNode | null = null
 let dataArray: Uint8Array | null = null
 let source: MediaElementAudioSourceNode | null = null
 let isPageVisible = true
+let boundAudioElement: HTMLAudioElement | null = null
 
 // Detect iOS
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
@@ -41,6 +42,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  detachAudioElementListeners()
   cleanup()
 })
 
@@ -62,10 +64,41 @@ watch(
   (newAudio) => {
     console.log('audioElement changed:', !!newAudio)
     if (newAudio) {
+      attachAudioElementListeners(newAudio)
       setupAudioContext(newAudio)
     }
   },
 )
+
+function attachAudioElementListeners(audioElement: HTMLAudioElement) {
+  if (boundAudioElement === audioElement) return
+  detachAudioElementListeners()
+  boundAudioElement = audioElement
+  audioElement.addEventListener('play', handleAudioPlay)
+  audioElement.addEventListener('pause', handleAudioPause)
+}
+
+function detachAudioElementListeners() {
+  if (!boundAudioElement) return
+  boundAudioElement.removeEventListener('play', handleAudioPlay)
+  boundAudioElement.removeEventListener('pause', handleAudioPause)
+  boundAudioElement = null
+}
+
+function handleAudioPlay() {
+  if (props.audioElement) {
+    setupAudioContext(props.audioElement)
+  }
+  if (audioContext?.state === 'suspended') {
+    audioContext.resume().then(() => startVisualization())
+  } else {
+    startVisualization()
+  }
+}
+
+function handleAudioPause() {
+  stopVisualization()
+}
 
 function initVisualizer() {
   if (!canvas.value) return

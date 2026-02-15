@@ -6,16 +6,23 @@ export class PlaybackService {
   private isPlaying: Ref<boolean>
   private currentSongIndex: Ref<number>
   private activeSongs: Ref<Song[]>
+  private onNeedMoreSongs?: () => Promise<void>
 
-  constructor(isPlaying: Ref<boolean>, currentSongIndex: Ref<number>, activeSongs: Ref<Song[]>) {
+  constructor(
+    isPlaying: Ref<boolean>,
+    currentSongIndex: Ref<number>,
+    activeSongs: Ref<Song[]>,
+    onNeedMoreSongs?: () => Promise<void>,
+  ) {
     this.isPlaying = isPlaying
     this.currentSongIndex = currentSongIndex
     this.activeSongs = activeSongs
+    this.onNeedMoreSongs = onNeedMoreSongs
   }
 
   initialize(): HTMLAudioElement {
     this.audioPlayer = new Audio()
-    this.audioPlayer.addEventListener('ended', () => this.nextTrack())
+    this.audioPlayer.addEventListener('ended', () => void this.nextTrack())
     this.audioPlayer.addEventListener('play', () => {
       this.isPlaying.value = true
     })
@@ -27,7 +34,7 @@ export class PlaybackService {
     if ('mediaSession' in navigator) {
       navigator.mediaSession.setActionHandler('play', () => this.togglePlayPause())
       navigator.mediaSession.setActionHandler('pause', () => this.togglePlayPause())
-      navigator.mediaSession.setActionHandler('nexttrack', () => this.nextTrack())
+      navigator.mediaSession.setActionHandler('nexttrack', () => void this.nextTrack())
       navigator.mediaSession.setActionHandler('previoustrack', () => this.prevTrack())
     }
 
@@ -70,11 +77,18 @@ export class PlaybackService {
     }
   }
 
-  nextTrack() {
+  async nextTrack() {
     const nextIndex = this.currentSongIndex.value + 1
     if (nextIndex < this.activeSongs.value.length) {
       this.playSong(nextIndex)
     } else {
+      if (this.onNeedMoreSongs) {
+        await this.onNeedMoreSongs()
+        if (nextIndex < this.activeSongs.value.length) {
+          this.playSong(nextIndex)
+          return
+        }
+      }
       if (this.activeSongs.value.length > 0) {
         this.playSong(0)
       } else {

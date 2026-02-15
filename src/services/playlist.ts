@@ -5,6 +5,7 @@ export interface PlaylistWithSongs extends Playlist {
   offset: number
   allSongsLoaded: boolean
   isLoadingMore: boolean
+  totalSongsCount: number
 }
 
 export class PlaylistService {
@@ -51,6 +52,10 @@ export class PlaylistService {
 
   async getPlaylistSongCount(playlistId: number): Promise<number> {
     return await dbService.getSongCountForPlaylist(playlistId);
+  }
+
+  async getPlaylistSize(playlistId: number): Promise<number> {
+    return await this.getPlaylistSongCount(playlistId);
   }
 
   async getSongByIndex(playlistId: number, index: number): Promise<Song | null> {
@@ -105,12 +110,14 @@ export class PlaylistService {
     for (const playlist of playlists) {
       if (!playlist.id) continue;
       const songs = await this.getSongsForPlaylist(playlist.id);
+      const totalSongsCount = await this.getPlaylistSongCount(playlist.id);
       result.push({
         ...playlist,
         songs,
         offset: 0,
         allSongsLoaded: true,
-        isLoadingMore: false
+        isLoadingMore: false,
+        totalSongsCount
       });
     }
     
@@ -122,12 +129,14 @@ export class PlaylistService {
     if (!playlist) return null;
     
     const songs = await this.getSongsForPlaylist(playlistId);
+    const totalSongsCount = await this.getPlaylistSongCount(playlistId);
     return {
       ...playlist,
       songs,
       offset: 0,
       allSongsLoaded: true,
-      isLoadingMore: false
+      isLoadingMore: false,
+      totalSongsCount
     };
   }
 

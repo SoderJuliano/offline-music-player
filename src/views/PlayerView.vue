@@ -81,7 +81,7 @@ onMounted(async () => {
   try {
     await loadInitialData()
 
-    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs)
+    playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs, ensureMoreSongsForPlayback)
     audioPlayer.value = playbackService.initialize()
 
     const handleResize = () => {
@@ -136,12 +136,16 @@ async function loadInitialData() {
 
   try {
     const loadedPlaylists = await playlistService.loadPlaylists()
-    playlists.value = loadedPlaylists.map((p) => ({
+    const playlistSizes = await Promise.all(
+      loadedPlaylists.map((p) => (p.id ? playlistService.getPlaylistSize(p.id) : Promise.resolve(0))),
+    )
+    playlists.value = loadedPlaylists.map((p, index) => ({
       ...p,
       songs: [],
       offset: 0,
       allSongsLoaded: false,
       isLoadingMore: false,
+      totalSongsCount: playlistSizes[index] || 0,
     }))
 
     if (playlists.value.length > 0) {
@@ -164,10 +168,13 @@ async function loadMoreSongs(playlistId: number) {
 
   playlist.isLoadingMore = true
   try {
+    if (playlist.totalSongsCount === 0) {
+      playlist.totalSongsCount = await playlistService.getPlaylistSize(playlistId)
+    }
     const newSongs = await playlistService.getSongsForPlaylist(playlistId, 5, playlist.offset)
     playlist.songs.push(...newSongs)
     playlist.offset += newSongs.length
-    if (newSongs.length < 5) {
+    if (playlist.offset >= playlist.totalSongsCount || newSongs.length < 5) {
       playlist.allSongsLoaded = true
     }
   } catch (error) {
@@ -183,6 +190,26 @@ async function resetAndLoadSongs(playlistId: number) {
     playlist.songs = []
     playlist.offset = 0
     playlist.allSongsLoaded = false
+    playlist.totalSongsCount = await playlistService.getPlaylistSize(playlistId)
+    await loadMoreSongs(playlistId)
+  }
+}
+
+async function ensureMoreSongsForPlayback() {
+  const playlistId = activePlaylistId.value
+  if (!playlistId) return
+
+  const playlist = playlists.value.find((p) => p.id === playlistId)
+  if (!playlist) return
+
+  const nextIndex = currentSongIndex.value + 1
+  if (nextIndex < playlist.songs.length) return
+
+  if (playlist.totalSongsCount === 0) {
+    playlist.totalSongsCount = await playlistService.getPlaylistSize(playlistId)
+  }
+
+  if (playlist.songs.length < playlist.totalSongsCount) {
     await loadMoreSongs(playlistId)
   }
 }
@@ -214,7 +241,7 @@ function togglePlayPause() {
 }
 
 function nextTrack() {
-  playbackService.nextTrack()
+  void playbackService.nextTrack()
 }
 
 function prevTrack() {
@@ -224,9 +251,13 @@ function prevTrack() {
 async function loadPlaylists() {
   try {
     const loadedPlaylists = await playlistService.loadPlaylists()
-    const newPlaylists = loadedPlaylists.map((p) => {
+    const playlistSizes = await Promise.all(
+      loadedPlaylists.map((p) => (p.id ? playlistService.getPlaylistSize(p.id) : Promise.resolve(0))),
+    )
+    const newPlaylists = loadedPlaylists.map((p, index) => {
       const existingPlaylist = playlists.value.find((ep) => ep.id === p.id)
       if (existingPlaylist) {
+        existingPlaylist.totalSongsCount = playlistSizes[index] || existingPlaylist.totalSongsCount
         return existingPlaylist // Preserve state if playlist already exists
       }
       return {
@@ -235,6 +266,7 @@ async function loadPlaylists() {
         offset: 0,
         allSongsLoaded: false,
         isLoadingMore: false,
+        totalSongsCount: playlistSizes[index] || 0,
       }
     })
     playlists.value = newPlaylists
@@ -283,9 +315,16 @@ async function handleFileSelection(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files || input.files.length === 0 || !activePlaylistId.value) return
 
-  const file = input.files[0]
-  if (!file.type.startsWith('audio/')) {
-    songAddError.value = 'Por favor, selecione um arquivo de áudio válido.'
+  const files = Array.from(input.files)
+  const isAudioFile = (file: File) => {
+    if (file.type && file.type.startsWith('audio/')) return true
+    const name = file.name.toLowerCase()
+    return name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.m4a') || name.endsWith('.aac') || name.endsWith('.ogg') || name.endsWith('.flac')
+  }
+
+  const invalidFiles = files.filter((f) => !isAudioFile(f))
+  if (invalidFiles.length > 0) {
+    songAddError.value = 'Por favor, selecione apenas arquivos de áudio válidos.'
     input.value = ''
     return
   }
@@ -296,18 +335,20 @@ async function handleFileSelection(event: Event) {
 
   try {
     songAddError.value = null
-    const base64Data = await blobToBase64(file)
+    for (const file of files) {
+      const base64Data = await blobToBase64(file)
 
-    const newSong: Omit<Song, 'id'> = {
-      playlistId: activePlaylistId.value,
-      title: file.name.split('.').slice(0, -1).join('.') || 'Música desconhecida',
-      artist: 'Artista Desconhecido',
-      year: new Date().getFullYear().toString(),
-      img: 'musica.png',
-      data: base64Data,
+      const newSong: Omit<Song, 'id'> = {
+        playlistId: activePlaylistId.value,
+        title: file.name.split('.').slice(0, -1).join('.') || 'Música desconhecida',
+        artist: 'Artista Desconhecido',
+        year: new Date().getFullYear().toString(),
+        img: 'musica.png',
+        data: base64Data,
+      }
+
+      await playlistService.addSong(newSong)
     }
-
-    await playlistService.addSong(newSong)
     await resetAndLoadSongs(activePlaylistId.value)
 
     // Restore playback state
@@ -603,7 +644,8 @@ function cancelDeletePlaylist() {
         <input
           ref="fileInputRef"
           type="file"
-          accept="audio/mp3,audio/mpeg,audio/wav,audio/aac"
+          accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac"
+          multiple
           @change="handleFileSelection"
           hidden
         />
