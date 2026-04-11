@@ -30,6 +30,10 @@ const criticalError = ref<string | null>(null)
 const songAddError = ref<string | null>(null)
 const openPlaylistId = ref<number | null>(null)
 
+// PWA Install
+const showInstallButton = ref(false)
+let deferredPrompt: any = null
+
 let songInfoHideTimer: number | null = null
 let isLoadingPlaylists = false
 let touchStartY = 0
@@ -73,10 +77,58 @@ const setLoaderRef = (el: any, playlistId: number) => {
   }
 }
 
+const installPWA = () => {
+  console.log('installPWA called, deferredPrompt:', deferredPrompt)
+  if (deferredPrompt) {
+    console.log('Calling prompt()')
+    deferredPrompt.prompt()
+    deferredPrompt.userChoice.then((choiceResult: any) => {
+      console.log('User choice result:', choiceResult)
+      if (choiceResult.outcome === 'accepted') {
+        console.log('User accepted the install prompt')
+      } else {
+        console.log('User dismissed the install prompt')
+      }
+      deferredPrompt = null
+      showInstallButton.value = false
+    })
+  } else {
+    console.log('No deferredPrompt available')
+    // Fallback para desenvolvimento: mostrar instruções
+    alert('Em desenvolvimento, use o menu do navegador:\n\n• Chrome: ⋮ > "Adicionar à tela inicial"\n• Firefox: ⋮ > "Instalar este site como app"\n• Safari iOS: Compartilhar > "Adicionar à tela inicial"')
+    
+    // Para testes, marcar como "instalado" após mostrar instruções
+    showInstallButton.value = false
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('unhandledrejection', (event) => {
     console.warn('Unhandled rejection:', event.reason)
     event.preventDefault()
+  })
+
+  // PWA Install prompt
+  window.addEventListener('beforeinstallprompt', (e) => {
+    console.log('beforeinstallprompt event fired', e)
+    console.log('Manifest loaded successfully')
+    e.preventDefault()
+    deferredPrompt = e
+    showInstallButton.value = true
+  })
+
+  // Verificar se manifest foi carregado
+  if ('manifest' in document) {
+    console.log('Manifest link found in document')
+  } else {
+    console.log('Manifest link not found')
+  }
+
+  // Quando o app for instalado, esconder o botão
+  window.addEventListener('appinstalled', () => {
+    console.log('PWA was installed')
+    showInstallButton.value = false
+    deferredPrompt = null
   })
 
   try {
@@ -590,6 +642,16 @@ function cancelDeletePlaylist() {
         <router-link to="/mapa" class="p2p-menu-btn" title="Compartilhar P2P">
           🗺️
         </router-link>
+
+        <!-- Install PWA Button -->
+        <button
+          v-if="showInstallButton"
+          @click="installPWA"
+          class="install-menu-btn"
+          title="Instalar App"
+        >
+          📱
+        </button>
 
         <!-- Collapse toggle button for mobile -->
         <button
