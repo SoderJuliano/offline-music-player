@@ -137,7 +137,20 @@ export default defineComponent({
       return myMarker;
     };
 
-    const requestGeolocation = (retryCount = 0): void => {
+    const checkGeolocationPermission = async (): Promise<string> => {
+      if (!('permissions' in navigator)) {
+        return 'prompt'; // Assume prompt if not supported
+      }
+      try {
+        const result = await navigator.permissions.query({ name: 'geolocation' });
+        return result.state;
+      } catch (e) {
+        console.warn('[P2PView] Permission query failed:', e);
+        return 'prompt';
+      }
+    };
+
+    const requestGeolocation = async (retryCount = 0): Promise<void> => {
       if (!('geolocation' in navigator)) {
         console.warn('[P2PView] Geolocation not supported');
         // Fallback: adicionar marker em localização padrão
@@ -147,8 +160,54 @@ export default defineComponent({
         return;
       }
 
-      addDebugLog('📍 Pedindo localização...');
-      console.log('[P2PView] Requesting geolocation... (attempt', retryCount + 1, ')');
+      const permissionState = await checkGeolocationPermission();
+      console.log('[P2PView] Geolocation permission state:', permissionState);
+
+      if (permissionState === 'denied') {
+        console.warn('[P2PView] Geolocation permission denied');
+        addDebugLog('❌ Permissão de localização negada. Usando localização padrão.');
+        const defaultLocation = { lat: -27.59, lng: -48.54 };
+        userLocation.value = defaultLocation;
+        if (map) {
+          map.setView(defaultLocation, 13);
+          addMyMarkerToMap(defaultLocation);
+        }
+        return;
+      }
+
+      if (permissionState === 'granted') {
+        // Permission already granted, get position without prompting
+        addDebugLog('✅ Permissão já concedida, obtendo localização...');
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            userLocation.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            addDebugLog(`✅ Localização obtida: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
+            console.log('[P2PView] Geolocation obtained:', userLocation.value);
+            map!.setView(userLocation.value, 15);
+            addMyMarkerToMap(userLocation.value);
+          },
+          (error) => {
+            console.error("[P2PView] Geolocation error:", error.message, error.code);
+            addDebugLog(`❌ Erro ao obter localização: ${error.message}`);
+            const defaultLocation = { lat: -27.59, lng: -48.54 };
+            userLocation.value = defaultLocation;
+            if (map) {
+              map.setView(defaultLocation, 13);
+              addMyMarkerToMap(defaultLocation);
+            }
+          },
+          {
+            enableHighAccuracy: false,
+            timeout: 10000,
+            maximumAge: 60000
+          }
+        );
+        return;
+      }
+
+      // permissionState === 'prompt', so ask for permission
+      addDebugLog('📍 Pedindo permissão de localização...');
+      console.log('[P2PView] Requesting geolocation permission... (attempt', retryCount + 1, ')');
       
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -167,7 +226,6 @@ export default defineComponent({
             if (error.code === 1) { // PERMISSION_DENIED
               alert('⚠️ Permissão de localização negada.\n\nSeu dispositivo será mostrado em uma localização padrão.\n\nPara compartilhar sua localização real, permita o acesso nas configurações do navegador.');
             } else if (error.code === 3) { // TIMEOUT
-              // Removido alerta de tempo esgotado para evitar interrupções na UI
               console.warn('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
               addDebugLog('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
             }
@@ -206,7 +264,7 @@ export default defineComponent({
       }).addTo(map);
 
       // Solicitar geolocalização com retry
-      requestGeolocation();
+      await requestGeolocation();
 
       localUserId.value = p2pService.getLocalId();
       addDebugLog(`🆔 Meu ID: ${localUserId.value.substring(0, 8)}`);
