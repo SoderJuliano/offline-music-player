@@ -12,6 +12,7 @@ class P2PService {
   private peers: Map<string, Peer.Instance> = new Map();
   private localId: string = `user_${Math.random().toString(36).substr(2, 9)}`;
   private onlineIds: Set<string> = new Set();
+  private initialized: boolean = false;
 
   public onConnect: ((peerId: string) => void) | null = null;
   public onData: ((peerId: string, data: any) => void) | null = null;
@@ -126,6 +127,7 @@ class P2PService {
       });
 
       console.log('[P2P] ✅ P2P Service initialized successfully');
+      this.initialized = true;
 
       // Periodic presence refresh to keep onlineIds synced (helps Safari if events are missed)
       try {
@@ -291,6 +293,10 @@ class P2PService {
 
   public getLocalId(): string {
     return this.localId;
+  }
+
+  public isInitialized(): boolean {
+    return this.initialized;
   }
   
   public getOnlinePeerIds(): string[] {

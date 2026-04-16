@@ -386,12 +386,14 @@ export default defineComponent({
         if (originalOnDisconnect) originalOnDisconnect(peerId);
       };
 
-      // P2P já foi inicializado no App.vue, não precisa reinicializar
-      // Apenas garantir que está inicializado
-      if (!p2pService.getLocalId()) {
-        console.log('[P2PView] P2P not initialized yet, initializing...');
+      // Se o serviço ainda não foi inicializado, inicializa aqui
+      if (!p2pService.isInitialized()) {
+        console.log('[P2PView] P2P service not initialized yet, initializing...');
         await p2pService.init();
       }
+      
+      connectedPeersCount.value = p2pService.getAllPeerIds().length;
+      addDebugLog(`👥 Contagem inicial de peers: ${connectedPeersCount.value}`);
       
       // Aguardar 3 segundos para garantir que conexões WebRTC completem
       addDebugLog('⏳ Aguardando conexões...');
@@ -408,6 +410,7 @@ export default defineComponent({
         console.log('[P2PView] 📤 Sending request-location to', peerId);
         p2pService.sendTo(peerId, { type: 'request-location' });
       });
+      connectedPeersCount.value = connectedPeers.length;
       
       // Continuar pedindo a cada 5s caso ainda não tenha marcadores (máximo 3 tentativas)
       let attempts = 0;
