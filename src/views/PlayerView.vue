@@ -846,9 +846,10 @@ function cancelDeletePlaylist() {
       <div class="confirm-delete-card" style="max-width:320px;text-align:center;">
         <div style="font-size:2em;margin-bottom:8px;">📲</div>
         <h3 style="margin:0 0 12px 0;">Instalar no iPhone</h3>
-        <p style="margin:0 0 8px 0;font-size:14px;">1. Toque em <strong>Compartilhar</strong> <span style="font-size:1.2em;">⎋</span> na barra do Safari</p>
-        <p style="margin:0 0 8px 0;font-size:14px;">2. Role e selecione <strong>"Adicionar à Tela de Início"</strong></p>
-        <p style="margin:0 0 16px 0;font-size:14px;">3. Toque em <strong>"Adicionar"</strong></p>
+        <p style="margin:0 0 4px 0;font-size:13px;color:#888;font-weight:600;">Safari:</p>
+        <p style="margin:0 0 8px 0;font-size:13px;">Toque em <strong>Compartilhar ↑</strong> → <strong>"Adicionar à Tela de Início"</strong></p>
+        <p style="margin:0 0 4px 0;font-size:13px;color:#888;font-weight:600;">Brave:</p>
+        <p style="margin:0 0 16px 0;font-size:13px;">Toque em <strong>≡</strong> (menu inferior direito) → <strong>"Add to Home Screen"</strong></p>
         <div class="confirm-delete-actions">
           <button @click="showIOSInstallModal = false" class="confirm-btn">Entendi!</button>
         </div>
