@@ -16,14 +16,15 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         clientsClaim: true,
         skipWaiting: true,
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/assets\//,  /^\/api\//],
       },
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
         name: 'Offline Music Player',
         short_name: 'MusicPlayer',
         description: 'Um player de música offline com P2P',
-        theme_color: '#ffffff',
-        icons: [
+        theme_color: '#ffffff',          version: '1.1.3',        icons: [
           {
             src: 'pwa-192x192.png',
             sizes: '192x192',

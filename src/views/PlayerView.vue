@@ -33,6 +33,9 @@ const openPlaylistId = ref<number | null>(null)
 // PWA Install
 const showInstallButton = ref(false)
 let deferredPrompt: any = null
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+const isInStandaloneMode = typeof window !== 'undefined' &&
+  (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true)
 
 let songInfoHideTimer: number | null = null
 let isLoadingPlaylists = false
@@ -92,12 +95,11 @@ const installPWA = () => {
       deferredPrompt = null
       showInstallButton.value = false
     })
+  } else if (isIOS) {
+    alert('Para instalar no iPhone/iPad:\n\n1. Toque em Compartilhar (ícone 📤 na barra do Safari)\n2. Role para baixo e selecione "Adicionar à Tela de Início"\n3. Toque em "Adicionar"\n\nDepois o app abrirá sem a barra do navegador! 🎵')
   } else {
     console.log('No deferredPrompt available')
-    // Fallback para desenvolvimento: mostrar instruções
-    alert('Em desenvolvimento, use o menu do navegador:\n\n• Chrome: ⋮ > "Adicionar à tela inicial"\n• Firefox: ⋮ > "Instalar este site como app"\n• Safari iOS: Compartilhar > "Adicionar à tela inicial"')
-    
-    // Para testes, marcar como "instalado" após mostrar instruções
+    alert('Use o menu do navegador:\n\n• Chrome: ⋮ > "Adicionar à tela inicial"\n• Firefox: ⋮ > "Instalar este site como app"')
     showInstallButton.value = false
   }
 }
@@ -108,7 +110,12 @@ onMounted(async () => {
     event.preventDefault()
   })
 
-  // PWA Install prompt
+  // iOS não dispara beforeinstallprompt — detectar manualmente
+  if (isIOS && !isInStandaloneMode) {
+    showInstallButton.value = true
+  }
+
+  // PWA Install prompt (Android/Desktop)
   window.addEventListener('beforeinstallprompt', (e) => {
     console.log('beforeinstallprompt event fired', e)
     console.log('Manifest loaded successfully')

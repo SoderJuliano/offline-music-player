@@ -9,7 +9,7 @@
     </div>
     
     <!-- Lista de dispositivos -->
-    <div class="devices-list" v-if="connectedDevices.length > 0">
+    <div class="devices-list" v-if="connectedPeersCount > 0">
       <h4>🌐 Dispositivos</h4>
       <div class="device-item" 
            v-for="device in connectedDevices" 
@@ -365,6 +365,7 @@ export default defineComponent({
         console.log('[P2PView] ✅ Peer connected:', peerId);
         addDebugLog(`✅ Peer conectou: ${peerId.substring(0, 8)}`);
         connectedPeersCount.value++;
+        updateDevicesList();
         
         // Pedir localização do peer que acabou de conectar
         addDebugLog(`📤 → ${peerId.substring(0, 8)}: request-location`);
@@ -416,19 +417,25 @@ export default defineComponent({
       let attempts = 0;
       locationInterval = setInterval(() => {
         attempts++;
-        if (attempts > 3) {
+        if (attempts > 6) {
           clearInterval(locationInterval);
-          addDebugLog('⚠️ Parou de tentar após 3 tentativas');
+          addDebugLog('⚠️ Parou de tentar após 6 tentativas');
           return;
         }
         
         const peers = p2pService.getAllPeerIds();
-        if (peerMarkers.size === 0 && peers.length > 0) {
-          addDebugLog(`🔄 Tentativa ${attempts}/3: pedindo localização`);
+        // Sempre atualizar o contador e a lista com a presença Ably atual
+        connectedPeersCount.value = peers.length;
+        updateDevicesList();
+        
+        if (peers.length > 0 && peerMarkers.size < peers.length) {
+          addDebugLog(`🔄 Tentativa ${attempts}/6: pedindo localização (${peers.length} peer(s))`);
           peers.forEach(peerId => {
-            p2pService.sendTo(peerId, { type: 'request-location' });
+            if (!peerMarkers.has(peerId)) {
+              p2pService.sendTo(peerId, { type: 'request-location' });
+            }
           });
-        } else if (peerMarkers.size > 0) {
+        } else if (peerMarkers.size >= peers.length && peers.length > 0) {
           clearInterval(locationInterval);
           addDebugLog('✅ Marcadores carregados!');
         }
