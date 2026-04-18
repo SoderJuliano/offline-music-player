@@ -32,10 +32,11 @@ const openPlaylistId = ref<number | null>(null)
 
 // PWA Install
 const showInstallButton = ref(false)
+const showIOSInstallModal = ref(false)
 let deferredPrompt: any = null
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
 const isInStandaloneMode = typeof window !== 'undefined' &&
-  (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true)
+  ((window.navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches)
 
 let songInfoHideTimer: number | null = null
 let isLoadingPlaylists = false
@@ -96,7 +97,7 @@ const installPWA = () => {
       showInstallButton.value = false
     })
   } else if (isIOS) {
-    alert('Para instalar no iPhone/iPad:\n\n1. Toque em Compartilhar (ícone 📤 na barra do Safari)\n2. Role para baixo e selecione "Adicionar à Tela de Início"\n3. Toque em "Adicionar"\n\nDepois o app abrirá sem a barra do navegador! 🎵')
+    showIOSInstallModal.value = true
   } else {
     console.log('No deferredPrompt available')
     alert('Use o menu do navegador:\n\n• Chrome: ⋮ > "Adicionar à tela inicial"\n• Firefox: ⋮ > "Instalar este site como app"')
@@ -840,6 +841,20 @@ function cancelDeletePlaylist() {
         </div>
       </div>
     </template>
+    <!-- iOS Install Modal -->
+    <div v-if="showIOSInstallModal" class="confirm-delete-overlay" @click.self="showIOSInstallModal = false">
+      <div class="confirm-delete-card" style="max-width:320px;text-align:center;">
+        <div style="font-size:2em;margin-bottom:8px;">📲</div>
+        <h3 style="margin:0 0 12px 0;">Instalar no iPhone</h3>
+        <p style="margin:0 0 8px 0;font-size:14px;">1. Toque em <strong>Compartilhar</strong> <span style="font-size:1.2em;">⎋</span> na barra do Safari</p>
+        <p style="margin:0 0 8px 0;font-size:14px;">2. Role e selecione <strong>"Adicionar à Tela de Início"</strong></p>
+        <p style="margin:0 0 16px 0;font-size:14px;">3. Toque em <strong>"Adicionar"</strong></p>
+        <div class="confirm-delete-actions">
+          <button @click="showIOSInstallModal = false" class="confirm-btn">Entendi!</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Confirm Delete Modal -->
     <div v-if="confirmDeletePlaylistId !== null" class="confirm-delete-overlay">
       <div class="confirm-delete-card">

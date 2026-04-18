@@ -66,6 +66,7 @@ export default defineComponent({
     const peerMarkers = new Map<string, L.Marker>();
     const playlistService = new PlaylistService();
     let locationInterval: any = null;
+    let syncInterval: any = null;
     
     // Lista de dispositivos conectados
     const connectedDevices = ref<Array<{ id: string, name: string, icon: string }>>([]);
@@ -413,31 +414,30 @@ export default defineComponent({
       });
       connectedPeersCount.value = connectedPeers.length;
       
-      // Continuar pedindo a cada 5s caso ainda não tenha marcadores (máximo 3 tentativas)
+      // Sync permanente: atualiza contador e lista a cada 3s enquanto a view estiver aberta
+      syncInterval = setInterval(() => {
+        const peers = p2pService.getAllPeerIds();
+        connectedPeersCount.value = peers.length;
+        updateDevicesList();
+      }, 3000);
+
+      // Pedir localização para novos peers que ainda não têm marcador (máximo 10 tentativas)
       let attempts = 0;
       locationInterval = setInterval(() => {
         attempts++;
-        if (attempts > 6) {
+        if (attempts > 10) {
           clearInterval(locationInterval);
-          addDebugLog('⚠️ Parou de tentar após 6 tentativas');
+          addDebugLog('⚠️ Parou de pedir localização após 10 tentativas');
           return;
         }
         
         const peers = p2pService.getAllPeerIds();
-        // Sempre atualizar o contador e a lista com a presença Ably atual
-        connectedPeersCount.value = peers.length;
-        updateDevicesList();
-        
-        if (peers.length > 0 && peerMarkers.size < peers.length) {
-          addDebugLog(`🔄 Tentativa ${attempts}/6: pedindo localização (${peers.length} peer(s))`);
-          peers.forEach(peerId => {
-            if (!peerMarkers.has(peerId)) {
-              p2pService.sendTo(peerId, { type: 'request-location' });
-            }
+        const peersWithoutMarker = peers.filter(id => !peerMarkers.has(id));
+        if (peersWithoutMarker.length > 0) {
+          addDebugLog(`🔄 Tentativa ${attempts}: pedindo localização de ${peersWithoutMarker.length} peer(s)`);
+          peersWithoutMarker.forEach(peerId => {
+            p2pService.sendTo(peerId, { type: 'request-location' });
           });
-        } else if (peerMarkers.size >= peers.length && peers.length > 0) {
-          clearInterval(locationInterval);
-          addDebugLog('✅ Marcadores carregados!');
         }
       }, 5000);
 
@@ -469,10 +469,9 @@ export default defineComponent({
         (p2pService as any).removeDataHandler(dataHandler);
       }
       
-      // Limpar intervalo de localização
-      if (locationInterval) {
-        clearInterval(locationInterval);
-      }
+      // Limpar intervalos
+      if (locationInterval) clearInterval(locationInterval);
+      if (syncInterval) clearInterval(syncInterval);
       
       // NÃO destruir o serviço P2P, deixar rodando em background
       // Apenas limpar o mapa e funções globais desta view
