@@ -192,6 +192,11 @@ class DbService {
     })
   }
 
+  async moveSong(songId: number, targetPlaylistId: number): Promise<void> {
+    await this.openPromise
+    await this.db.songs.update(songId, { playlistId: targetPlaylistId })
+  }
+
   async getSongCountForPlaylist(playlistId: number): Promise<number> {
     await this.openPromise
     try {

@@ -103,6 +103,10 @@ export class PlaylistService {
     await dbService.deletePlaylist(playlistId)
   }
 
+  async moveSong(songId: number, targetPlaylistId: number): Promise<void> {
+    await dbService.moveSong(songId, targetPlaylistId)
+  }
+
   async loadAllPlaylistsWithSongs(): Promise<PlaylistWithSongs[]> {
     const playlists = await this.loadPlaylists();
     const result: PlaylistWithSongs[] = [];

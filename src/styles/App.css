@@ -549,7 +549,7 @@
   }
 
   .song-title {
-    font-size: 1em !important;
+    font-size: 0.67em !important;
   }
 
   .playlist-name-display,
@@ -565,7 +565,7 @@
 
   .playlist-header h2,
   .editable-playlist-name {
-    font-size: 1.5em;
+    font-size: 0.75em;
     text-align: center;
   }
 

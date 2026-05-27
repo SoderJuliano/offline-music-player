@@ -29,6 +29,11 @@ const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 76
 const criticalError = ref<string | null>(null)
 const songAddError = ref<string | null>(null)
 const openPlaylistId = ref<number | null>(null)
+const draggingSong = ref<Song | null>(null)
+const draggingSourcePlaylistId = ref<number | null>(null)
+const moveSuccessMessage = ref<string | null>(null)
+let longPressTimer: ReturnType<typeof setTimeout> | null = null
+const isLongPressing = ref(false)
 
 // PWA Install
 const showInstallButton = ref(false)
@@ -631,6 +636,96 @@ function cancelDeletePlaylist() {
   confirmDeletePlaylistId.value = null
   confirmDeletePlaylistName.value = ''
 }
+
+// Drag and Drop Handlers
+function handleDragStart(song: Song, playlistId: number) {
+  draggingSong.value = song
+  draggingSourcePlaylistId.value = playlistId
+}
+
+function handleDragOver(event: DragEvent) {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+async function handleDrop(targetPlaylistId: number) {
+  if (!draggingSong.value || !draggingSong.value.id || draggingSourcePlaylistId.value === targetPlaylistId) {
+    draggingSong.value = null
+    draggingSourcePlaylistId.value = null
+    return
+  }
+
+  try {
+    const songToMove = draggingSong.value
+    const sourceId = draggingSourcePlaylistId.value!
+    
+    await playlistService.moveSong(songToMove.id!, targetPlaylistId)
+    
+    // Refresh both playlists
+    await resetAndLoadSongs(sourceId)
+    await resetAndLoadSongs(targetPlaylistId)
+    
+    moveSuccessMessage.value = `Música "${songToMove.title}" movida com sucesso!`
+    setTimeout(() => {
+      moveSuccessMessage.value = null
+    }, 3000)
+  } catch (error: any) {
+    alert(error.message || 'Erro ao mover música.')
+  } finally {
+    draggingSong.value = null
+    draggingSourcePlaylistId.value = null
+  }
+}
+
+// Touch Handlers for Move
+function handleSongTouchStart(song: Song, playlistId: number, event: TouchEvent) {
+  if (longPressTimer) clearTimeout(longPressTimer)
+  
+  longPressTimer = setTimeout(() => {
+    isLongPressing.value = true
+    draggingSong.value = song
+    draggingSourcePlaylistId.value = playlistId
+    // Feedback tátil se suportado
+    if ('vibrate' in navigator) {
+      navigator.vibrate(50)
+    }
+  }, 600) // Long press 600ms
+}
+
+function handleSongTouchMove() {
+  if (!isLongPressing.value) {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
+  }
+}
+
+function handleSongTouchEnd() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+async function selectMoveTarget(targetPlaylistId: number) {
+  await handleDrop(targetPlaylistId)
+  isLongPressing.value = false
+}
+
+function openMoveMenu(song: Song, playlistId: number) {
+  draggingSong.value = song
+  draggingSourcePlaylistId.value = playlistId
+  isLongPressing.value = true
+}
+
+function cancelMove() {
+  draggingSong.value = null
+  draggingSourcePlaylistId.value = null
+  isLongPressing.value = false
+}
 </script>
 
 <template>
@@ -751,8 +846,20 @@ function cancelDeletePlaylist() {
           hidden
         />
 
+        <!-- Success Message for Moving Songs -->
+        <div v-if="moveSuccessMessage" class="move-success-banner">
+          {{ moveSuccessMessage }}
+        </div>
+
         <!-- Loop through playlists -->
-        <div v-for="playlist in playlists" :key="playlist.id" class="playlist-container">
+        <div 
+          v-for="playlist in playlists" 
+          :key="playlist.id" 
+          class="playlist-container"
+          @dragover="handleDragOver"
+          @drop="handleDrop(playlist.id!)"
+          :class="{ 'drag-target': draggingSong && draggingSourcePlaylistId !== playlist.id }"
+        >
           <div class="playlist-header" @click="togglePlaylist(playlist.id!)">
             <!-- Playlist name display/edit -->
             <div v-if="editingPlaylistId !== playlist.id" class="playlist-name-display">
@@ -807,6 +914,11 @@ function cancelDeletePlaylist() {
               :key="song.id"
               @click.stop="playSong(index, playlist.id!)"
               :class="{ active: currentSong?.id === song.id }"
+              draggable="true"
+              @dragstart="handleDragStart(song, playlist.id!)"
+              @touchstart.passive="handleSongTouchStart(song, playlist.id!, $event)"
+              @touchmove.passive="handleSongTouchMove"
+              @touchend.passive="handleSongTouchEnd"
             >
               <div class="song-details">
                 <div style="display: flex;">
@@ -819,9 +931,14 @@ function cancelDeletePlaylist() {
                   </div>
                 </div>
               </div>
-              <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">
-                (x)
-              </button>
+              <div class="song-actions">
+                <button @click.stop="openMoveMenu(song, playlist.id!)" class="move-song-btn" title="Mover música">
+                  ➔
+                </button>
+                <button @click.stop="deleteSong(song.id!, playlist.id!)" class="delete-song-btn">
+                  (x)
+                </button>
+              </div>
             </li>
             <li
               v-if="!playlist.allSongsLoaded && openPlaylistId === playlist.id"
@@ -841,6 +958,27 @@ function cancelDeletePlaylist() {
         </div>
       </div>
     </template>
+    
+    <!-- Move Song Modal (Mobile Long Press) -->
+    <div v-if="isLongPressing && draggingSong" class="confirm-delete-overlay" @click.self="cancelMove">
+      <div class="confirm-delete-card">
+        <h3 style="margin:0 0 8px 0;">Mover Música</h3>
+        <p style="margin:0 0 16px 0;">Mover <strong>{{ draggingSong.title }}</strong> para:</p>
+        <div class="move-target-list">
+          <button 
+            v-for="pl in playlists.filter(p => p.id !== draggingSourcePlaylistId)" 
+            :key="pl.id"
+            @click="selectMoveTarget(pl.id!)"
+            class="move-target-btn"
+          >
+            {{ pl.name }}
+          </button>
+        </div>
+        <div class="confirm-delete-actions">
+          <button @click="cancelMove" class="cancel-btn">Cancelar</button>
+        </div>
+      </div>
+    </div>
     <!-- iOS Install Modal -->
     <div v-if="showIOSInstallModal" class="confirm-delete-overlay" @click.self="showIOSInstallModal = false">
       <div class="confirm-delete-card" style="max-width:320px;text-align:center;">
@@ -946,5 +1084,78 @@ function cancelDeletePlaylist() {
   padding: 8px 12px;
   border-radius: 6px;
   cursor: pointer;
+}
+
+.move-success-banner {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #10b981;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 8px;
+  z-index: 4000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from { transform: translate(-50%, -100%); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.playlist-container.drag-target {
+  border: 2px dashed #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.move-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.move-target-btn {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: white;
+  padding: 10px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.move-target-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.song-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.move-song-btn {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 1.2em;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.2s;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.move-song-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
 }
 </style>
