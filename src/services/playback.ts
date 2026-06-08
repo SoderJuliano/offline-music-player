@@ -101,6 +101,8 @@ export class PlaybackService {
     const prevIndex = this.currentSongIndex.value - 1
     if (prevIndex >= 0) {
       this.playSong(prevIndex)
+    } else if (this.activeSongs.value.length > 0) {
+      this.playSong(this.activeSongs.value.length - 1)
     }
   }
 

@@ -88,11 +88,50 @@
   margin: 30px 0;
   min-height: 80px;
   transition: opacity 0.3s ease;
+  width: 100%;
+  overflow: hidden;
 }
 
 .song-info h2 {
   font-size: 1.8em;
   margin: 0;
+  white-space: nowrap;
+  display: inline-block;
+  width: max-content;
+}
+
+.song-title-wrapper {
+  overflow: hidden;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .song-title-wrapper {
+    justify-content: flex-start;
+    margin-top: 15px;
+  }
+
+  .marquee {
+    /* 
+      A animação marquee-first-loop roda apenas uma vez (os primeiros 10s + o primeiro scroll).
+      Depois, a marquee-continuous assume (movimento constante).
+    */
+    animation: 
+      marquee-first-loop 15s linear forwards,
+      marquee-continuous 10s linear infinite 15s !important;
+  }
+}
+
+@keyframes marquee-first-loop {
+  0%, 66% { transform: translateX(0); } /* 10s estático */
+  100% { transform: translateX(-100%); } /* Scroll até sumir */
+}
+
+@keyframes marquee-continuous {
+  0% { transform: translateX(100%); } /* Entra pela direita */
+  100% { transform: translateX(-100%); } /* Sai pela esquerda */
 }
 
 .song-info p {
@@ -468,6 +507,11 @@
     min-height: auto;
     border-bottom: 1px solid rgba(255, 255, 255, 0.2);
     box-sizing: border-box;
+
+    && button, a {
+      width: 30px !important;
+      height: 30px !important;
+    }
   }
 
   .visualizer-container {
@@ -491,7 +535,12 @@
   }
 
   .song-info h2 {
-    font-size: 1.4em;
+    font-size: 1.2em !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    display: inline-block !important;
+    width: max-content !important;
   }
 
     .controls {
@@ -499,16 +548,16 @@
         border: 2px solid white;
         border-radius: 10px;
         padding: 10px;
-        width: 80%;
+        justify-self: right;
         justify-content: space-evenly;
         margin-bottom: 10px;
     }
 
   .controls button {
-    font-size: 1.8em;
-    padding: 10px;
-    min-width: 50px;
-    min-height: 50px;
+    font-size: 1.1em !important;
+    padding: 8px;
+    min-width: 40px !important;
+    min-height: 40px !important;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -525,9 +574,9 @@
   }
 
   .controls .play-pause-btn {
-    font-size: 2.5em;
-    min-width: 60px;
-    min-height: 60px;
+    font-size: 1.6em !important;
+    min-width: 50px !important;
+    min-height: 50px !important;
   }
 
   .playlist-view {
@@ -572,9 +621,31 @@
   .add-songs-btn {
     flex: 1;
     padding: 16px 20px;
-    font-size: 1.1em;
+    font-size: .67em;
     border-radius: 25px;
     min-height: 52px;
+    text-align: start;
+  }
+
+  .vinyl-gif {
+    height: 65px;
+    justify-self: start;
+  }
+
+  .vinyl-gif-running {
+    animation: girar 15s linear infinite;
+  }
+
+  @keyframes girar {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .player-controls {
+    width: 100%;
+    display: flex;
+    justify-content: space-evenly;
+    gap: 15px;
   }
 
   .song-list li {
@@ -621,20 +692,20 @@
   }
 
   .song-info h2 {
-    font-size: 0.95em;
+    font-size: 1.1em !important;
     margin: 3px 0;
   }
 
   .controls button {
-    font-size: 1.6em;
-    min-width: 45px;
-    min-height: 45px;
+    font-size: 1em !important;
+    min-width: 34px !important;
+    min-height: 34px !important;
   }
 
   .controls .play-pause-btn {
-    font-size: 2.2em;
-    min-width: 55px;
-    min-height: 55px;
+    font-size: 1.4em !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
   }
 }
 

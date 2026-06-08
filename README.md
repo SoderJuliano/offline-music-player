@@ -31,5 +31,3 @@ Instalação:
 - As versões das dependências são compatíveis com o package.json atual.
 
 ---
-
-Atualizei o README.md com as versões atuais das dependências principais. Deseja que eu salve a versão final ou altere algum detalhe?

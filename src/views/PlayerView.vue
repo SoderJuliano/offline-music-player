@@ -23,7 +23,12 @@ const isAddingNewPlaylist = ref(false)
 const editingPlaylistId = ref<number | null>(null)
 const editingPlaylistName = ref('')
 const hideSongInfo = ref(false)
-const isHeaderCollapsed = ref(false)
+const isHeaderCollapsed = ref(typeof window !== 'undefined' ? localStorage.getItem('playerHeaderCollapsed') === 'true' : false)
+
+watch(isHeaderCollapsed, (newVal) => {
+  localStorage.setItem('playerHeaderCollapsed', String(newVal))
+})
+
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
 const windowHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 768)
 const criticalError = ref<string | null>(null)
@@ -66,6 +71,7 @@ const currentSong = computed(() => {
 })
 
 const isSmallScreen = computed(() => windowHeight.value <= 750 && windowWidth.value <= 450)
+const isMobile = computed(() => windowWidth.value <= 768)
 const isDesktop = computed(() => windowWidth.value > 768)
 
 const observer = ref<IntersectionObserver | null>(null)
@@ -522,7 +528,7 @@ async function savePlaylistName(playlistId: number) {
 }
 
 function handlePlaylistTouchStart(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return
+  if (!isMobile.value) return
 
   // Don't track for buttons, inputs, or interactive elements
   const target = event.target as HTMLElement
@@ -545,7 +551,7 @@ function handlePlaylistTouchStart(event: TouchEvent | MouseEvent) {
 }
 
 function handlePlaylistTouchMove(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return
+  if (!isMobile.value) return
 
   if (event instanceof TouchEvent && event.touches.length > 0) {
     const touchCurrentY = event.touches[0].clientY
@@ -554,16 +560,13 @@ function handlePlaylistTouchMove(event: TouchEvent | MouseEvent) {
     // If moved more than 10px, consider it scrolling
     if (deltaY > 10 && !isScrolling) {
       isScrolling = true
-      // Add delay before hiding for smoother UX
-      hideDelayTimer = setTimeout(() => {
-        hideSongInfo.value = true
-      }, 150)
+      // Auto-hide of header removed to prevent layout jumping
     }
   }
 }
 
 function handlePlaylistTouchEnd(event: TouchEvent | MouseEvent) {
-  if (!isSmallScreen.value) return
+  if (!isMobile.value) return
 
   const target = event.target as HTMLElement
   if (
@@ -758,7 +761,7 @@ function cancelMove() {
 
         <!-- Collapse toggle button for mobile -->
         <button
-          v-if="isSmallScreen"
+          v-if="isMobile"
           @click="toggleHeaderCollapse"
           class="collapse-toggle"
           :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
@@ -766,12 +769,12 @@ function cancelMove() {
           {{ isHeaderCollapsed ? '∨' : '∧' }}
         </button>
 
-        <h1 v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed" class="fade-element">
-          Player
+        <h1 v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed" class="fade-element">
+          Music Player
         </h1>
         <p
           class="subtitle fade-element"
-          v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed"
+          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
         >
           Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
         </p>
@@ -787,21 +790,28 @@ function cancelMove() {
 
         <div
           class="song-info fade-element"
-          v-show="(!hideSongInfo || !isSmallScreen) && !isHeaderCollapsed"
+          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
         >
-          <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
+          <div class="song-title-wrapper">
+            <h2 :class="{ 'marquee': isMobile && (currentSong?.title?.length || 0) > 20 }">
+              {{ currentSong?.title || 'Nenhuma música tocando' }}
+            </h2>
+          </div>
         </div>
 
-        <div class="controls">
-          <button @click="prevTrack" title="Anterior">⏪</button>
-          <button
-            @click="togglePlayPause"
-            class="play-pause-btn"
-            :title="isPlaying ? 'Pausar' : 'Tocar'"
-          >
-            {{ isPlaying ? '⏸️' : '▶️' }}
-          </button>
-          <button @click="nextTrack" title="Próxima">⏩</button>
+        <div class="player-controls">
+          <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
+          <div class="controls">
+            <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
+            <button
+              @click="togglePlayPause"
+              class="play-pause-btn control-play"
+              :title="isPlaying ? 'Pausar' : 'Tocar'"
+            >
+              {{ isPlaying ? '⏸️' : '▶️' }}
+            </button>
+            <button @click="nextTrack" title="Próxima" class="control-next">⏩</button>
+          </div>
         </div>
       </div>
 
@@ -927,7 +937,7 @@ function cancelMove() {
                     <span class="song-title">
                     {{ song.title }}
                     </span>
-                    <p v-if="currentSong?.id !== song.id" class="song-artist">{{ song.artist }}</p>
+                    <p v-if="currentSong?.id !== song.id && song.artist !== 'Artista Desconhecido'" class="song-artist">{{ song.artist }}</p>
                   </div>
                 </div>
               </div>
