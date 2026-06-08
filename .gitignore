@@ -28,4 +28,8 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+.env/node_modules
+/dist
+*.log
 .env
+.vscode/
