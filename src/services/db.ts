@@ -14,7 +14,7 @@ export interface Song {
   img: string
   album?: string
   duration?: number
-  data: string // Base64 Data URL
+  data: string | Blob // Supports legacy Base64 and new Blob storage
 }
 
 // This helper is used for the migration and for adding new songs
@@ -50,14 +50,12 @@ export class MySubClassedDexie extends Dexie {
     })
 
     // Version 4: The new schema. Data is now a base64 string.
-    // This upgrade function will handle the migration from blob to base64.
     this.version(4)
       .stores({
-        songs: '++id, playlistId, title', // No change to indexes, just data structure
+        songs: '++id, playlistId, title',
       })
       .upgrade(async (tx) => {
         console.log('Upgrading database to version 4: Migrating Blobs to Base64...')
-        // This runs only when upgrading from a version < 4
         return tx
           .table('songs')
           .toCollection()
@@ -67,13 +65,18 @@ export class MySubClassedDexie extends Dexie {
                 const base64Data = await blobToBase64(song.data)
                 song.data = base64Data
               } catch (e) {
-                console.error('Could not migrate song, data will be lost.', song.title, e)
-                // If conversion fails, storing null will effectively delete the song data
+                console.error('Could not migrate song.', song.title, e)
                 song.data = null
               }
             }
           })
       })
+
+    // Version 5: Support for both Base64 and Blob. 
+    // New songs will be stored as Blobs for efficiency.
+    this.version(5).stores({
+      songs: '++id, playlistId, title',
+    })
   }
 }
 
@@ -153,8 +156,8 @@ class DbService {
       }
 
       const songs = await query.toArray()
-      // Filter out songs that might have null data from a failed migration
-      return songs.filter((song) => song && typeof song.data === 'string' && song.data.length > 0)
+      // Filter out songs that might have null data
+      return songs.filter((song) => song && song.data)
     } catch (error) {
       console.error('Error getting songs:', error)
       return []
@@ -163,8 +166,7 @@ class DbService {
 
   async addSong(song: Omit<Song, 'id'>): Promise<any> {
     await this.openPromise
-    // The data is now expected to be a base64 string, as conversion happens in App.vue
-    if (!song.data || typeof song.data !== 'string' || song.data.length === 0) {
+    if (!song.data) {
       throw new Error('Dados de áudio inválidos ou vazios.')
     }
 

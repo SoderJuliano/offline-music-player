@@ -438,15 +438,13 @@ async function handleFileSelection(event: Event) {
   try {
     songAddError.value = null
     for (const file of files) {
-      const base64Data = await blobToBase64(file)
-
       const newSong: Omit<Song, 'id'> = {
         playlistId: activePlaylistId.value,
         title: file.name.split('.').slice(0, -1).join('.') || 'Música desconhecida',
         artist: 'Artista Desconhecido',
         year: new Date().getFullYear().toString(),
         img: 'musica.png',
-        data: base64Data,
+        data: file, // Save File (Blob) directly
       }
 
       await playlistService.addSong(newSong)
@@ -759,60 +757,81 @@ function cancelMove() {
           📱
         </button>
 
-        <!-- Collapse toggle button for mobile -->
-        <button
-          v-if="isMobile"
-          @click="toggleHeaderCollapse"
-          class="collapse-toggle"
-          :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
-        >
-          {{ isHeaderCollapsed ? '∨' : '∧' }}
-        </button>
+        <!-- MOBILE UI ELEMENTS -->
+        <template v-if="isMobile">
+          <!-- Collapse toggle button for mobile -->
+          <button
+            @click="toggleHeaderCollapse"
+            class="collapse-toggle"
+            :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
+          >
+            {{ isHeaderCollapsed ? '∨' : '∧' }}
+          </button>
 
-        <h1 v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed" class="fade-element">
-          Music Player
-        </h1>
-        <p
-          class="subtitle fade-element"
-          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
-        >
-          Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
-        </p>
+          <h1 v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed" class="fade-element">
+            Music Player
+          </h1>
+          <p
+            class="subtitle fade-element"
+            v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
+          >
+            Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
+          </p>
 
-        <!-- 
-          Show visualizer only on desktop. 
-          It is always rendered (not using v-show or conditional currentSong) to prevent the component
-          from being destroyed and re-created, which causes a fatal audio context error.
-        -->
-        <div v-if="isDesktop" class="visualizer-container">
-          <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
-        </div>
-
-        <div
-          class="song-info fade-element"
-          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
-        >
-          <div class="song-title-wrapper">
-            <h2 :class="{ 'marquee': isMobile && (currentSong?.title?.length || 0) > 20 }">
-              {{ currentSong?.title || 'Nenhuma música tocando' }}
-            </h2>
+          <div
+            class="song-info fade-element"
+            v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
+          >
+            <div class="song-title-wrapper">
+              <h2 :class="{ 'marquee': (currentSong?.title?.length || 0) > 20 }">
+                {{ currentSong?.title || 'Nenhuma música tocando' }}
+              </h2>
+            </div>
           </div>
-        </div>
 
-        <div class="player-controls">
-          <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
-          <div class="controls">
-            <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
+          <div class="player-controls">
+            <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
+            <div class="controls">
+              <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
+              <button
+                @click="togglePlayPause"
+                class="play-pause-btn control-play"
+                :title="isPlaying ? 'Pausar' : 'Tocar'"
+              >
+                {{ isPlaying ? '⏸️' : '▶️' }}
+              </button>
+              <button @click="nextTrack" title="Próxima" class="control-next">⏩</button>
+            </div>
+          </div>
+        </template>
+
+        <!-- DESKTOP UI ELEMENTS -->
+        <template v-else>
+          <h1>Music Player</h1>
+          <p class="subtitle">
+            Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
+          </p>
+
+          <div class="visualizer-container">
+            <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
+          </div>
+
+          <div class="song-info desktop-song-info">
+            <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
+          </div>
+
+          <div class="controls desktop-controls">
+            <button @click="prevTrack" title="Anterior">⏪</button>
             <button
               @click="togglePlayPause"
-              class="play-pause-btn control-play"
+              class="play-pause-btn"
               :title="isPlaying ? 'Pausar' : 'Tocar'"
             >
               {{ isPlaying ? '⏸️' : '▶️' }}
             </button>
-            <button @click="nextTrack" title="Próxima" class="control-next">⏩</button>
+            <button @click="nextTrack" title="Próxima">⏩</button>
           </div>
-        </div>
+        </template>
       </div>
 
       <div

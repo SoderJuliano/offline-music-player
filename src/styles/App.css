@@ -134,6 +134,31 @@
   100% { transform: translateX(-100%); } /* Sai pela esquerda */
 }
 
+/* DESKTOP UI FIXES */
+.desktop-song-info h2 {
+  white-space: normal !important;
+  overflow: visible !important;
+  width: 100% !important;
+  display: block !important;
+  text-overflow: clip !important;
+}
+
+.desktop-controls {
+  display: flex !important;
+  gap: 30px !important;
+  margin-top: 20px;
+}
+
+.desktop-controls button {
+  font-size: 3em !important;
+  opacity: 1 !important;
+  display: flex !important;
+}
+
+.desktop-controls .play-pause-btn {
+  font-size: 4em !important;
+}
+
 .song-info p {
   font-size: 1em;
   opacity: 0.8;

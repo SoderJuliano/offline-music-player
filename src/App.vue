@@ -7,7 +7,7 @@ import { onMounted, onUnmounted } from 'vue';
 import { p2pService } from './services/p2p';
 
 // Detectar tipo de dispositivo
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const isMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
 const deviceType = isMobile ? 'phone' : 'desktop';
 
 // Inicializar P2P em background quando app carrega
@@ -78,8 +78,42 @@ onMounted(async () => {
   };
   
   // Responder a pedidos de localização e playlists
+  const pendingAcks = new Map<string, (val: boolean) => void>();
+  let wakeLock: any = null;
+
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLock = await (navigator as any).wakeLock.request('screen');
+        console.log('[App] 💡 Sender Wake Lock active');
+      } catch (err) {
+        console.warn('[App] Wake Lock error:', err);
+      }
+    }
+  };
+
+  const releaseWakeLock = () => {
+    if (wakeLock) {
+      wakeLock.release().then(() => {
+        wakeLock = null;
+        console.log('[App] 😴 Sender Wake Lock released');
+      });
+    }
+  };
+
   p2pService.onData = async (peerId, data) => {
     console.log('[App] 📨 Received data:', data.type, 'from', peerId);
+    
+    if (data.type === 'chunk-ack') {
+      const ackKey = `${peerId}-${data.payload.songIndex}-${data.payload.chunkIndex}`;
+      const resolver = pendingAcks.get(ackKey);
+      if (resolver) {
+        resolver(true);
+        pendingAcks.delete(ackKey);
+      }
+      return;
+    }
+
     console.log('[App] Broadcasting to', dataHandlers.length, 'handler(s)');
     
     // Broadcast para todos os handlers registrados (P2PView, etc)
@@ -129,12 +163,14 @@ onMounted(async () => {
     } else if (data.type === 'request-clone') {
       console.log('[App] 💾 Peer requested clone of playlist', data.payload.playlistId);
       try {
+        await requestWakeLock();
         const { PlaylistService } = await import('./services/playlist');
         const playlistService = new PlaylistService();
         const playlist = await playlistService.getPlaylistWithSongs(data.payload.playlistId);
         
         if (!playlist || !playlist.songs.length) {
           p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Playlist vazia ou não encontrada' } });
+          releaseWakeLock();
           return;
         }
         
@@ -147,15 +183,31 @@ onMounted(async () => {
           } 
         });
         
-        // Send each song in chunks
-        // Use larger chunks over WebRTC (64KB) and safer size over Ably fallback (30KB)
-        const CHUNK_SIZE = p2pService.isDirectConnected(peerId) ? (64 * 1024) : (30 * 1024);
         for (let i = 0; i < playlist.songs.length; i++) {
           const song = playlist.songs[i];
-          const dataStr = song.data;
+          let dataStr = '';
+          
+          if (song.data instanceof Blob) {
+            dataStr = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(song.data as Blob);
+            });
+          } else {
+            dataStr = song.data as string;
+          }
+
+          // Use smaller chunks for transport reliability (16KB is safe)
+          const CHUNK_SIZE = 16 * 1024;
           const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
           
-          // Send song metadata
+          // Extrair MIME type
+          let mimeType = 'audio/mpeg';
+          if (dataStr.startsWith('data:')) {
+            const match = dataStr.match(/^data:([^;]+);/);
+            if (match) mimeType = match[1];
+          }
+
           p2pService.sendTo(peerId, {
             type: 'clone-song-meta',
             payload: {
@@ -165,7 +217,8 @@ onMounted(async () => {
               album: song.album,
               duration: song.duration,
               playlistId: song.playlistId,
-              totalChunks
+              totalChunks,
+              mimeType
             }
           });
           
@@ -184,13 +237,25 @@ onMounted(async () => {
                 data: chunk
               }
             });
-            
-            // Small delay between chunks to avoid overwhelming client
-            await new Promise(resolve => setTimeout(resolve, 15));
+
+            // Flow control
+            if (chunkIndex % 15 === 0 && chunkIndex > 0) {
+              const ackKey = `${peerId}-${i}-${chunkIndex}`;
+              const ackReceived = new Promise((resolve) => {
+                pendingAcks.set(ackKey, resolve as any);
+                setTimeout(() => {
+                  if (pendingAcks.has(ackKey)) {
+                    resolve(false);
+                    pendingAcks.delete(ackKey);
+                  }
+                }, 8000);
+              });
+              await ackReceived;
+            }
+            await new Promise(resolve => setTimeout(resolve, 8));
           }
         }
         
-        // Send completion
         p2pService.sendTo(peerId, { 
           type: 'clone-complete', 
           payload: { playlistName: playlist.name } 
@@ -198,9 +263,10 @@ onMounted(async () => {
       } catch (error) {
         console.error('[App] Error handling clone request:', error);
         p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Erro ao processar clonagem' } });
+      } finally {
+        releaseWakeLock();
       }
     } else if (data.type === 'request-playlist-songs-meta') {
-      // Send minimal songs metadata for the given playlist — paginated
       try {
         const { PlaylistService } = await import('./services/playlist');
         const playlistService = new PlaylistService();
@@ -222,8 +288,8 @@ onMounted(async () => {
         console.error('[App] Error sending songs meta:', error);
       }
     } else if (data.type === 'request-song') {
-      // Send only one song from the playlist
       try {
+        await requestWakeLock();
         const { PlaylistService } = await import('./services/playlist');
         const playlistService = new PlaylistService();
         const idx = data.payload.songIndex;
@@ -231,10 +297,10 @@ onMounted(async () => {
         const song = await playlistService.getSongByIndex(playlistId, idx);
         if (!song) {
           p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Música não encontrada.' } });
+          releaseWakeLock();
           return;
         }
 
-        // Start session for single-song transfer
         p2pService.sendTo(peerId, { 
           type: 'clone-start', 
           payload: { 
@@ -243,11 +309,20 @@ onMounted(async () => {
           } 
         });
 
-        const CHUNK_SIZE = p2pService.isDirectConnected(peerId) ? (64 * 1024) : (30 * 1024);
-        const dataStr = song.data;
+        let dataStr = '';
+        if (song.data instanceof Blob) {
+          dataStr = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(song.data as Blob);
+          });
+        } else {
+          dataStr = song.data as string;
+        }
+
+        const CHUNK_SIZE = 16 * 1024;
         const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
 
-        // Send song metadata
         p2pService.sendTo(peerId, {
           type: 'clone-song-meta',
           payload: {
@@ -261,7 +336,6 @@ onMounted(async () => {
           }
         });
 
-        // Send chunks
         for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
           const start = chunkIndex * CHUNK_SIZE;
           const end = Math.min(start + CHUNK_SIZE, dataStr.length);
@@ -275,21 +349,35 @@ onMounted(async () => {
               data: chunk
             }
           });
-          await new Promise(resolve => setTimeout(resolve, 15));
+
+          if (chunkIndex % 15 === 0 && chunkIndex > 0) {
+            const ackKey = `${peerId}-0-${chunkIndex}`;
+            const ackReceived = new Promise((resolve) => {
+              pendingAcks.set(ackKey, resolve as any);
+              setTimeout(() => {
+                if (pendingAcks.has(ackKey)) {
+                  resolve(false);
+                  pendingAcks.delete(ackKey);
+                }
+              }, 8000);
+            });
+            await ackReceived;
+          }
+          await new Promise(resolve => setTimeout(resolve, 8));
         }
 
-        // Complete
         p2pService.sendTo(peerId, { type: 'clone-complete', payload: { playlistName: 'Playlist' } });
       } catch (error) {
         console.error('[App] Error handling single-song request:', error);
         p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Erro ao processar música' } });
+      } finally {
+        releaseWakeLock();
       }
     }
   };
 });
 
 onUnmounted(() => {
-  // Não destruir o serviço ao desmontar, deixar rodando
   console.log('[App] App unmounted, but P2P service remains active');
 });
 </script>
