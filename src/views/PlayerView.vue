@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h, watch }
 import { type Song } from '../services/db'
 import { PlaylistService, type PlaylistWithSongs } from '../services/playlist'
 import { PlaybackService } from '../services/playback'
+import SeekBar from '../components/SeekBar.vue'
 import '../styles/App.css'
 
 const AudioVisualizer = defineAsyncComponent({
@@ -17,6 +18,8 @@ const activePlaylistId = ref<number | null>(null)
 const currentSongIndex = ref(-1)
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const isPlaying = ref(false)
+const currentTime = ref(0)
+const duration = ref(0)
 const newPlaylistName = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isAddingNewPlaylist = ref(false)
@@ -155,6 +158,7 @@ onMounted(async () => {
 
     playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs, ensureMoreSongsForPlayback)
     audioPlayer.value = playbackService.initialize()
+    attachSeekListeners(audioPlayer.value)
 
     const handleResize = () => {
       windowWidth.value = window.innerWidth
@@ -186,8 +190,37 @@ onMounted(async () => {
   }
 })
 
+function onTimeUpdate() {
+  if (audioPlayer.value) currentTime.value = audioPlayer.value.currentTime
+}
+
+function onDurationChange() {
+  const d = audioPlayer.value?.duration ?? 0
+  duration.value = isFinite(d) ? d : 0
+}
+
+function attachSeekListeners(el: HTMLAudioElement) {
+  el.addEventListener('timeupdate', onTimeUpdate)
+  el.addEventListener('loadedmetadata', onDurationChange)
+  el.addEventListener('durationchange', onDurationChange)
+}
+
+function detachSeekListeners(el: HTMLAudioElement) {
+  el.removeEventListener('timeupdate', onTimeUpdate)
+  el.removeEventListener('loadedmetadata', onDurationChange)
+  el.removeEventListener('durationchange', onDurationChange)
+}
+
+function onSeek(seconds: number) {
+  if (audioPlayer.value) audioPlayer.value.currentTime = seconds
+  currentTime.value = seconds
+}
+
 onUnmounted(() => {
   clearSongInfoTimer()
+  if (audioPlayer.value) {
+    detachSeekListeners(audioPlayer.value)
+  }
   if (playbackService) {
     playbackService.cleanup()
   }
@@ -789,6 +822,13 @@ function cancelMove() {
             </div>
           </div>
 
+          <SeekBar
+            :current-time="currentTime"
+            :duration="duration"
+            @seek="onSeek"
+            class="player-seekbar"
+          />
+
           <div class="player-controls">
             <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
             <div class="controls">
@@ -819,6 +859,13 @@ function cancelMove() {
           <div class="song-info desktop-song-info">
             <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
           </div>
+
+          <SeekBar
+            :current-time="currentTime"
+            :duration="duration"
+            @seek="onSeek"
+            class="player-seekbar"
+          />
 
           <div class="controls desktop-controls">
             <button @click="prevTrack" title="Anterior">⏪</button>

@@ -45,6 +45,11 @@
   text-align: center;
 }
 
+.player-seekbar {
+  width: 100%;
+  margin: 12px 0;
+}
+
 .player-main h1 {
   font-size: 2.2em;
   margin: 5px 0px 0px 0px;
