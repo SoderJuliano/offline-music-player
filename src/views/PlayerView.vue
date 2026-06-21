@@ -38,6 +38,7 @@ const criticalError = ref<string | null>(null)
 const songAddError = ref<string | null>(null)
 const openPlaylistId = ref<number | null>(null)
 const draggingSong = ref<Song | null>(null)
+const editingSong = ref<Song | null>(null)
 const draggingSourcePlaylistId = ref<number | null>(null)
 const moveSuccessMessage = ref<string | null>(null)
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
@@ -760,6 +761,14 @@ function cancelMove() {
   draggingSourcePlaylistId.value = null
   isLongPressing.value = false
 }
+
+function openSongEditor(song: Song) {
+  editingSong.value = song
+}
+
+function closeSongEditor() {
+  editingSong.value = null
+}
 </script>
 
 <template>
@@ -1008,6 +1017,9 @@ function cancelMove() {
                 </div>
               </div>
               <div class="song-actions">
+                <button @click.stop="openSongEditor(song)" class="edit-song-btn" title="Editar música">
+                  ⚙️
+                </button>
                 <button @click.stop="openMoveMenu(song, playlist.id!)" class="move-song-btn" title="Mover música">
                   ➔
                 </button>
@@ -1055,6 +1067,25 @@ function cancelMove() {
         </div>
       </div>
     </div>
+    <!-- Song Editor Modal -->
+    <div v-if="editingSong" class="confirm-delete-overlay" @click.self="closeSongEditor">
+      <div class="confirm-delete-card" style="max-width:420px;">
+        <h3 style="margin:0 0 8px 0;">Editar música</h3>
+        <p style="margin:0 0 16px 0;">
+          <strong>{{ editingSong.title }}</strong>
+          <template v-if="editingSong.artist && editingSong.artist !== 'Artista Desconhecido'">
+            — {{ editingSong.artist }}
+          </template>
+        </p>
+        <p style="margin:0 0 16px 0;font-size:13px;color:#888;">
+          O recorte de áudio (TrimBar) será adicionado aqui em breve.
+        </p>
+        <div class="confirm-delete-actions">
+          <button @click="closeSongEditor" class="cancel-btn">Fechar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- iOS Install Modal -->
     <div v-if="showIOSInstallModal" class="confirm-delete-overlay" @click.self="showIOSInstallModal = false">
       <div class="confirm-delete-card" style="max-width:320px;text-align:center;">
@@ -1233,5 +1264,32 @@ function cancelMove() {
 .move-song-btn:hover {
   opacity: 1;
   transform: scale(1.1);
+}
+
+/* Botão de engrenagem: escondido por padrao, visivel apenas no desktop
+   (ponteiro preciso OU largura >= 1024px). Sempre visivel, sem depender de hover. */
+.edit-song-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 1.1em;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: all 0.2s;
+  padding: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.edit-song-btn:hover {
+  opacity: 1;
+  transform: scale(1.1) rotate(45deg);
+}
+
+@media (pointer: fine), (min-width: 1024px) {
+  .edit-song-btn {
+    display: flex;
+  }
 }
 </style>
