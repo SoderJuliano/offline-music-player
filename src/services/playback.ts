@@ -41,6 +41,8 @@ export class PlaybackService {
     return this.audioPlayer
   }
 
+  private currentObjectUrl: string | null = null
+
   playSong(index: number) {
     if (index < 0 || index >= this.activeSongs.value.length) return
     this.currentSongIndex.value = index
@@ -48,8 +50,20 @@ export class PlaybackService {
     const song = this.activeSongs.value[index]
     if (!song || !song.data) return
 
+    // Revoke previous Object URL to free memory
+    if (this.currentObjectUrl) {
+      URL.revokeObjectURL(this.currentObjectUrl)
+      this.currentObjectUrl = null
+    }
+
     if (this.audioPlayer) {
-      this.audioPlayer.src = song.data // Directly use the base64 data URL
+      if (song.data instanceof Blob) {
+        this.currentObjectUrl = URL.createObjectURL(song.data)
+        this.audioPlayer.src = this.currentObjectUrl
+      } else {
+        // Legacy Base64 support
+        this.audioPlayer.src = song.data 
+      }
       this.audioPlayer.play()
     }
 
@@ -112,10 +126,17 @@ export class PlaybackService {
     this.audioPlayer.src = ''
     this.isPlaying.value = false
     this.currentSongIndex.value = -1
+
+    if (this.currentObjectUrl) {
+      URL.revokeObjectURL(this.currentObjectUrl)
+      this.currentObjectUrl = null
+    }
   }
 
   cleanup() {
-    // No longer need to revoke Object URLs, so this can be empty
-    // or we can just remove the call to it.
+    if (this.currentObjectUrl) {
+      URL.revokeObjectURL(this.currentObjectUrl)
+      this.currentObjectUrl = null
+    }
   }
 }

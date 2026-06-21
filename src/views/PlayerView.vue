@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h, watch }
 import { type Song } from '../services/db'
 import { PlaylistService, type PlaylistWithSongs } from '../services/playlist'
 import { PlaybackService } from '../services/playback'
+import SeekBar from '../components/SeekBar.vue'
 import '../styles/App.css'
 
 const AudioVisualizer = defineAsyncComponent({
@@ -17,6 +18,8 @@ const activePlaylistId = ref<number | null>(null)
 const currentSongIndex = ref(-1)
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const isPlaying = ref(false)
+const currentTime = ref(0)
+const duration = ref(0)
 const newPlaylistName = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isAddingNewPlaylist = ref(false)
@@ -35,6 +38,7 @@ const criticalError = ref<string | null>(null)
 const songAddError = ref<string | null>(null)
 const openPlaylistId = ref<number | null>(null)
 const draggingSong = ref<Song | null>(null)
+const editingSong = ref<Song | null>(null)
 const draggingSourcePlaylistId = ref<number | null>(null)
 const moveSuccessMessage = ref<string | null>(null)
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
@@ -155,6 +159,7 @@ onMounted(async () => {
 
     playbackService = new PlaybackService(isPlaying, currentSongIndex, activeSongs, ensureMoreSongsForPlayback)
     audioPlayer.value = playbackService.initialize()
+    attachSeekListeners(audioPlayer.value)
 
     const handleResize = () => {
       windowWidth.value = window.innerWidth
@@ -186,8 +191,37 @@ onMounted(async () => {
   }
 })
 
+function onTimeUpdate() {
+  if (audioPlayer.value) currentTime.value = audioPlayer.value.currentTime
+}
+
+function onDurationChange() {
+  const d = audioPlayer.value?.duration ?? 0
+  duration.value = isFinite(d) ? d : 0
+}
+
+function attachSeekListeners(el: HTMLAudioElement) {
+  el.addEventListener('timeupdate', onTimeUpdate)
+  el.addEventListener('loadedmetadata', onDurationChange)
+  el.addEventListener('durationchange', onDurationChange)
+}
+
+function detachSeekListeners(el: HTMLAudioElement) {
+  el.removeEventListener('timeupdate', onTimeUpdate)
+  el.removeEventListener('loadedmetadata', onDurationChange)
+  el.removeEventListener('durationchange', onDurationChange)
+}
+
+function onSeek(seconds: number) {
+  if (audioPlayer.value) audioPlayer.value.currentTime = seconds
+  currentTime.value = seconds
+}
+
 onUnmounted(() => {
   clearSongInfoTimer()
+  if (audioPlayer.value) {
+    detachSeekListeners(audioPlayer.value)
+  }
   if (playbackService) {
     playbackService.cleanup()
   }
@@ -438,15 +472,13 @@ async function handleFileSelection(event: Event) {
   try {
     songAddError.value = null
     for (const file of files) {
-      const base64Data = await blobToBase64(file)
-
       const newSong: Omit<Song, 'id'> = {
         playlistId: activePlaylistId.value,
         title: file.name.split('.').slice(0, -1).join('.') || 'Música desconhecida',
         artist: 'Artista Desconhecido',
         year: new Date().getFullYear().toString(),
         img: 'musica.png',
-        data: base64Data,
+        data: file, // Save File (Blob) directly
       }
 
       await playlistService.addSong(newSong)
@@ -729,6 +761,14 @@ function cancelMove() {
   draggingSourcePlaylistId.value = null
   isLongPressing.value = false
 }
+
+function openSongEditor(song: Song) {
+  editingSong.value = song
+}
+
+function closeSongEditor() {
+  editingSong.value = null
+}
 </script>
 
 <template>
@@ -759,60 +799,95 @@ function cancelMove() {
           📱
         </button>
 
-        <!-- Collapse toggle button for mobile -->
-        <button
-          v-if="isMobile"
-          @click="toggleHeaderCollapse"
-          class="collapse-toggle"
-          :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
-        >
-          {{ isHeaderCollapsed ? '∨' : '∧' }}
-        </button>
+        <!-- MOBILE UI ELEMENTS -->
+        <template v-if="isMobile">
+          <!-- Collapse toggle button for mobile -->
+          <button
+            @click="toggleHeaderCollapse"
+            class="collapse-toggle"
+            :title="isHeaderCollapsed ? 'Mostrar informações' : 'Ocultar informações'"
+          >
+            {{ isHeaderCollapsed ? '∨' : '∧' }}
+          </button>
 
-        <h1 v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed" class="fade-element">
-          Music Player
-        </h1>
-        <p
-          class="subtitle fade-element"
-          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
-        >
-          Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
-        </p>
+          <h1 v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed" class="fade-element">
+            Music Player
+          </h1>
+          <p
+            class="subtitle fade-element"
+            v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
+          >
+            Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
+          </p>
 
-        <!-- 
-          Show visualizer only on desktop. 
-          It is always rendered (not using v-show or conditional currentSong) to prevent the component
-          from being destroyed and re-created, which causes a fatal audio context error.
-        -->
-        <div v-if="isDesktop" class="visualizer-container">
-          <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
-        </div>
-
-        <div
-          class="song-info fade-element"
-          v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
-        >
-          <div class="song-title-wrapper">
-            <h2 :class="{ 'marquee': isMobile && (currentSong?.title?.length || 0) > 20 }">
-              {{ currentSong?.title || 'Nenhuma música tocando' }}
-            </h2>
+          <div
+            class="song-info fade-element"
+            v-show="(!hideSongInfo || !isMobile) && !isHeaderCollapsed"
+          >
+            <div class="song-title-wrapper">
+              <h2 :class="{ 'marquee': (currentSong?.title?.length || 0) > 20 }">
+                {{ currentSong?.title || 'Nenhuma música tocando' }}
+              </h2>
+            </div>
           </div>
-        </div>
 
-        <div class="player-controls">
-          <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
-          <div class="controls">
-            <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
+          <SeekBar
+            :current-time="currentTime"
+            :duration="duration"
+            @seek="onSeek"
+            class="player-seekbar"
+          />
+
+          <div class="player-controls">
+            <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
+            <div class="controls">
+              <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
+              <button
+                @click="togglePlayPause"
+                class="play-pause-btn control-play"
+                :title="isPlaying ? 'Pausar' : 'Tocar'"
+              >
+                {{ isPlaying ? '⏸️' : '▶️' }}
+              </button>
+              <button @click="nextTrack" title="Próxima" class="control-next">⏩</button>
+            </div>
+          </div>
+        </template>
+
+        <!-- DESKTOP UI ELEMENTS -->
+        <template v-else>
+          <h1>Music Player</h1>
+          <p class="subtitle">
+            Adicione músicas do seu computador e elas ficarão salvas para a sua próxima visita.
+          </p>
+
+          <div class="visualizer-container">
+            <AudioVisualizer :audio-element="audioPlayer" :is-playing="isPlaying" />
+          </div>
+
+          <div class="song-info desktop-song-info">
+            <h2>{{ currentSong?.title || 'Nenhuma música tocando' }}</h2>
+          </div>
+
+          <SeekBar
+            :current-time="currentTime"
+            :duration="duration"
+            @seek="onSeek"
+            class="player-seekbar"
+          />
+
+          <div class="controls desktop-controls">
+            <button @click="prevTrack" title="Anterior">⏪</button>
             <button
               @click="togglePlayPause"
-              class="play-pause-btn control-play"
+              class="play-pause-btn"
               :title="isPlaying ? 'Pausar' : 'Tocar'"
             >
               {{ isPlaying ? '⏸️' : '▶️' }}
             </button>
-            <button @click="nextTrack" title="Próxima" class="control-next">⏩</button>
+            <button @click="nextTrack" title="Próxima">⏩</button>
           </div>
-        </div>
+        </template>
       </div>
 
       <div
@@ -942,6 +1017,9 @@ function cancelMove() {
                 </div>
               </div>
               <div class="song-actions">
+                <button @click.stop="openSongEditor(song)" class="edit-song-btn" title="Editar música">
+                  ⚙️
+                </button>
                 <button @click.stop="openMoveMenu(song, playlist.id!)" class="move-song-btn" title="Mover música">
                   ➔
                 </button>
@@ -989,6 +1067,25 @@ function cancelMove() {
         </div>
       </div>
     </div>
+    <!-- Song Editor Modal -->
+    <div v-if="editingSong" class="confirm-delete-overlay" @click.self="closeSongEditor">
+      <div class="confirm-delete-card" style="max-width:420px;">
+        <h3 style="margin:0 0 8px 0;">Editar música</h3>
+        <p style="margin:0 0 16px 0;">
+          <strong>{{ editingSong.title }}</strong>
+          <template v-if="editingSong.artist && editingSong.artist !== 'Artista Desconhecido'">
+            — {{ editingSong.artist }}
+          </template>
+        </p>
+        <p style="margin:0 0 16px 0;font-size:13px;color:#888;">
+          O recorte de áudio (TrimBar) será adicionado aqui em breve.
+        </p>
+        <div class="confirm-delete-actions">
+          <button @click="closeSongEditor" class="cancel-btn">Fechar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- iOS Install Modal -->
     <div v-if="showIOSInstallModal" class="confirm-delete-overlay" @click.self="showIOSInstallModal = false">
       <div class="confirm-delete-card" style="max-width:320px;text-align:center;">
@@ -1167,5 +1264,32 @@ function cancelMove() {
 .move-song-btn:hover {
   opacity: 1;
   transform: scale(1.1);
+}
+
+/* Botão de engrenagem: escondido por padrao, visivel apenas no desktop
+   (ponteiro preciso OU largura >= 1024px). Sempre visivel, sem depender de hover. */
+.edit-song-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 1.1em;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: all 0.2s;
+  padding: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.edit-song-btn:hover {
+  opacity: 1;
+  transform: scale(1.1) rotate(45deg);
+}
+
+@media (pointer: fine), (min-width: 1024px) {
+  .edit-song-btn {
+    display: flex;
+  }
 }
 </style>

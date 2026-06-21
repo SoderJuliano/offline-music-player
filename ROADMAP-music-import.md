@@ -1,0 +1,36 @@
+# Roadmap: Importação de Músicas por Link
+
+## Objetivo
+Permitir que o usuário cole um link (YouTube, SoundCloud, URL direta de áudio, etc.) e a música seja salva diretamente no banco do navegador (Dexie), sem download manual, integrado ao fluxo já existente de armazenamento do compartilhamento P2P.
+
+## Arquitetura proposta
+
+O fluxo começa com o usuário colando uma URL no player. Um detector de fonte identifica o tipo de URL e roteia para o handler correto: URLs diretas de áudio (.mp3/.ogg/.flac) são buscadas com fetch() diretamente; SoundCloud e Jamendo usam suas APIs públicas sem backend; YouTube e outros sites não suportados client-side passam por um microserviço com yt-dlp. Em todos os casos, o stream é salvo byte a byte no Dexie da mesma forma que o fluxo P2P atual com simple-peer, e a música aparece na biblioteca offline ao final.
+
+## Fase 1 — Client-side puro (sem backend) — Começar aqui
+
+A primeira etapa cobre tudo que pode ser feito sem nenhum servidor. Para URLs diretas de áudio terminando em .mp3, .ogg, .flac, .wav ou .aac, basta usar fetch() com streaming via response.body.getReader(), salvar os chunks no Dexie igual ao sistema P2P já existente, e exibir progresso em %. Nenhuma dependência nova é necessária e a complexidade é baixa. O Archive.org (archive.org/details/...) também se enquadra aqui pois tem CORS liberado e API pública sem autenticação — o endpoint https://archive.org/metadata/{identifier} retorna a URL direta do arquivo de áudio, que então segue o mesmo fluxo das URLs diretas. O Jamendo oferece música Creative Commons com API gratuita, requerendo apenas cadastro para obter um client_id gratuito via https://api.jamendo.com/v3.0/tracks/. O SoundCloud (tracks públicas) também é viável client-side usando um client_id obtido inspecionando as requisições do próprio site, com a ressalva de que esse client_id pode mudar e é necessário implementar fallback com aviso ao usuário.
+
+## Fase 2 — Microserviço backend (quando necessário)
+
+Quando a Fase 1 não cobrir a fonte desejada (principalmente YouTube), o caminho é um microserviço simples hospedado em Railway, Render ou Fly.io (todos com free tier). A stack recomendada é Node.js 20+ ou Python 3.11+ com o binário yt-dlp como ferramenta core. O endpoint mínimo é POST /extract recebendo { "url": "..." } no body e respondendo com stream de áudio em audio/webm ou audio/mp4, mais headers com título, artista, duração e thumbnail. O frontend detecta que a URL não é suportada client-side, chama o microserviço, recebe o stream e salva no Dexie com o mesmo código da Fase 1. O yt-dlp suporta YouTube, Spotify (preview 30s nativo; full track requer cookie de sessão premium), Deezer preview, Bandcamp, Vimeo e mais de 1000 outros sites. As variáveis de ambiente mínimas do serviço são ALLOWED_ORIGINS para o domínio do player, RATE_LIMIT_PER_IP para evitar abuso (sugestão: 10/min) e MAX_DURATION_SECONDS para bloquear vídeos muito longos (sugestão: 600). O comando yt-dlp para fazer pipe do áudio direto para o cliente é: yt-dlp -x --audio-format mp3 --audio-quality 0 -o - "URL_AQUI".
+
+## Fase 3 — UX e funcionalidades extras
+
+Após as fases anteriores funcionando, as melhorias de experiência incluem: detecção automática de tipo de URL ao colar sem precisar selecionar a fonte manualmente; extração de metadados como título, artista, álbum, thumbnail e duração; fila de importação para processar vários links de uma vez; importação de playlist inteira via YouTube Playlist URL ou SoundCloud Set; histórico de importações com status de sucesso, falha ou em progresso; retry automático em falha de rede; e indicador de progresso byte a byte reutilizando o mesmo componente do P2P se já existir.
+
+## Componentes Vue a criar ou modificar
+
+O componente ImportByUrl.vue deve ser criado com input de URL, botão importar e barra de progresso. O módulo urlSourceDetector.js deve ser criado para detectar o tipo de URL via regex e rotear para o handler correto. O módulo audioFetcher.js deve ser criado para fazer fetch() com streaming e callback de progresso. Os módulos jamendoService.js e soundcloudService.js devem ser criados para encapsular as integrações com cada API. O libraryStore.js existente deve ser modificado para adicionar a ação importFromUrl(url). O dexieStorage.js existente deve ser verificado para confirmar que já aceita chunks de stream, o que provavelmente já funciona dado o fluxo P2P atual.
+
+## Ordem de implementação sugerida para a IA
+
+Implementar audioFetcher.js com fetch streaming e persistência no Dexie. Depois implementar urlSourceDetector.js com regex para cada tipo de URL suportado. Criar ImportByUrl.vue com UI mínima funcional. Integrar Archive.org por ser a mais simples e sem autenticação. Integrar Jamendo com client_id. Integrar SoundCloud. Criar o microserviço backend da Fase 2. Integrar YouTube via microserviço. Por último, implementar importação de playlists completas da Fase 3.
+
+## Referências técnicas
+
+yt-dlp: https://github.com/yt-dlp/yt-dlp — Dexie.js: https://dexie.org/docs/ — Streams API: https://developer.mozilla.org/en-US/docs/Web/API/Streams_API — Jamendo API: https://developer.jamendo.com/v3.0 — Archive.org API: https://archive.org/developers/index-apis.html — simple-peer (já no projeto): https://github.com/feross/simple-peer
+
+## Edição e recorte de músicas (trim)
+
+Cada item da lista de músicas ganhará um botão de engrenagem que só aparece quando o usuário passa o mouse por cima (hover) e que é exibido apenas em desktop, controlado por media query usando (pointer: fine) ou largura mínima de 1024px para nunca poluir a interface em telas de toque pequenas; ao clicar nessa engrenagem é aberto um painel ou modal de edição da música, e dentro desse painel fica uma seekbar dupla de recorte, um componente novo chamado TrimBar.vue, com dois thumbs arrastáveis representando o ponto de início e o ponto de fim do trecho que o usuário quer manter, renderizado visualmente como ——◆————◆——— com o intervalo entre os dois pontos destacado em cor de realce e o restante em cor neutra; esse TrimBar.vue deve reaproveitar toda a lógica de drag e de eventos de toque já implementada no SeekBar.vue (cálculo de razão a partir de getBoundingClientRect, listeners de mouse e touch no window durante o arraste, preventDefault no touchmove para bloquear o scroll e remoção da transição durante o drag), recebendo as props duration (Number), trimStart (Number) e trimEnd (Number) e emitindo o evento update:trim com o objeto { start, end } em segundos, garantindo que o thumb de início nunca ultrapasse o de fim e vice-versa; a operação de corte propriamente dita não será implementada nesta etapa e fica registrada como trabalho futuro, mas o planejamento já prevê que o trim será feito via Web Audio API decodificando o ArrayBuffer armazenado no Dexie com decodeAudioData, fatiando o AudioBuffer pelo intervalo selecionado entre start e end, e re-encodando o resultado para um novo Blob que substitui a entrada original no banco, com a ressalva importante de que o re-encoding client-side em MP3 exige uma biblioteca como lamejs ou similar para gerar o arquivo final, e de que para formatos como ogg ou webm pode ser necessário recorrer a um microserviço de conversão no backend, reaproveitando a mesma infraestrutura da Fase 2.

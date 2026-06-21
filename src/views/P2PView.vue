@@ -124,7 +124,54 @@ export default defineComponent({
     });
     
     // Buffer for receiving chunked songs
-    const songChunksBuffer = new Map<string, { chunks: string[], totalChunks: number, metadata: any, processed?: boolean }>();
+    const songChunksBuffer = new Map<string, { chunks: string[], totalChunks: number, metadata: any, receivedCount: number, processed?: boolean }>();
+
+    // Wake Lock to prevent screen sleep during transfer
+    let wakeLock: any = null;
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+          console.log('[P2PView] 💡 Screen Wake Lock is active');
+        } catch (err: any) {
+          console.warn(`[P2PView] Wake Lock error: ${err.name}, ${err.message}`);
+        }
+      }
+    };
+
+    const releaseWakeLock = () => {
+      if (wakeLock) {
+        wakeLock.release().then(() => {
+          wakeLock = null;
+          console.log('[P2PView] 😴 Screen Wake Lock released');
+        });
+      }
+    };
+
+    // Stale transfer detection
+    let staleCheckInterval: any = null;
+    let lastActivityTime = 0;
+
+    const startStaleCheck = () => {
+      lastActivityTime = Date.now();
+      if (staleCheckInterval) clearInterval(staleCheckInterval);
+      staleCheckInterval = setInterval(() => {
+        if (cloneProgress.value.active && Date.now() - lastActivityTime > 60000) {
+          console.error('[P2PView] ❌ Transfer timed out (60s no data)');
+          cloneProgress.value.active = false;
+          alert('Transferência interrompida: a conexão está muito lenta ou foi perdida.');
+          stopStaleCheck();
+          releaseWakeLock();
+        }
+      }, 10000);
+    };
+
+    const stopStaleCheck = () => {
+      if (staleCheckInterval) {
+        clearInterval(staleCheckInterval);
+        staleCheckInterval = null;
+      }
+    };
 
     const addMyMarkerToMap = (location: { lat: number, lng: number }) => {
       if (!map) return;
@@ -299,6 +346,10 @@ export default defineComponent({
             
             console.log('[P2PView] 🆕 Clone started:', newPlaylistName, 'ID:', newPlaylistId, 'Songs:', data.payload.totalSongs);
             
+            // Prevent screen from sleeping during transfer
+            await requestWakeLock();
+            startStaleCheck();
+
             cloneProgress.value = {
               active: true,
               playlistName: newPlaylistName,
@@ -320,7 +371,8 @@ export default defineComponent({
               songChunksBuffer.set(key, { 
                 chunks: new Array(data.payload.totalChunks), 
                 totalChunks: data.payload.totalChunks, 
-                metadata: data.payload 
+                metadata: data.payload,
+                receivedCount: 0
               });
             } else {
               songChunksBuffer.get(key)!.metadata = data.payload;
@@ -328,12 +380,27 @@ export default defineComponent({
             break;
           case 'clone-song-chunk':
             await handleSongChunk(peerId, data.payload);
+            // Send acknowledgement for large transfers every 10 chunks to prevent overwhelming the sender
+            if (data.payload.chunkIndex % 10 === 0 || data.payload.chunkIndex === data.payload.totalChunks - 1) {
+              p2pService.sendTo(peerId, { 
+                type: 'chunk-ack', 
+                payload: { 
+                  songIndex: data.payload.songIndex, 
+                  chunkIndex: data.payload.chunkIndex 
+                } 
+              });
+            }
+            break;
+          case 'chunk-ack':
+            // Logic handled by the sender in handleCloneRequest/App.vue
             break;
           case 'clone-complete':
             await finalizeClone(peerId, data.payload);
             break;
           case 'clone-error':
             cloneProgress.value.active = false;
+            releaseWakeLock();
+            stopStaleCheck();
             alert('Erro ao clonar playlist: ' + data.payload.message);
             songChunksBuffer.clear();
             break;
@@ -591,7 +658,19 @@ export default defineComponent({
         const CHUNK_SIZE = 16 * 1024;
         for (let i = 0; i < playlist.songs.length; i++) {
           const song = playlist.songs[i];
-          const dataStr = song.data; // base64 string
+          let dataStr = '';
+          
+          if (song.data instanceof Blob) {
+            // Convert Blob to base64 for transport
+            dataStr = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(song.data as Blob);
+            });
+          } else {
+            dataStr = song.data;
+          }
+
           const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
           
           // Send song metadata
@@ -645,61 +724,97 @@ export default defineComponent({
       const { songIndex, chunkIndex, totalChunks, data } = payload;
       const key = `${peerId}-${songIndex}`;
       
+      // Update activity timestamp for timeout detector
+      lastActivityTime = Date.now();
+      
       if (!songChunksBuffer.has(key)) {
-        songChunksBuffer.set(key, { chunks: new Array(totalChunks), totalChunks, metadata: null });
+        // This shouldn't normally happen if metadata came first, but handle it gracefully
+        songChunksBuffer.set(key, { 
+          chunks: new Array(totalChunks), 
+          totalChunks, 
+          metadata: null,
+          receivedCount: 0
+        });
       }
       
       const buffer = songChunksBuffer.get(key)!;
-      buffer.chunks[chunkIndex] = data;
+      if (buffer.chunks[chunkIndex] === undefined) {
+        buffer.chunks[chunkIndex] = data;
+        buffer.receivedCount++;
+      }
       
-      // Check if all chunks received
-      const receivedChunks = buffer.chunks.filter(c => c !== undefined).length;
-      if (receivedChunks === totalChunks && buffer.metadata) {
-        // Verificar se já processamos esta música
-        if (buffer.processed) {
-          console.log('[P2PView] Song already processed, skipping...');
-          return;
+      // Update progress visualization
+      if (cloneProgress.value.active && buffer.metadata) {
+        const songProgress = Math.round((buffer.receivedCount / totalChunks) * 100);
+        if (totalChunks > 20) {
+           cloneProgress.value.currentSong = `${buffer.metadata.title} (${songProgress}%)`;
         }
+      }
+
+      // Check if all chunks received
+      if (buffer.receivedCount === totalChunks && buffer.metadata) {
+        if (buffer.processed) return;
         buffer.processed = true;
         
-        // Reconstruct song
-        const fullData = buffer.chunks.join('');
-        const song: Omit<Song, 'id'> = {
-          title: buffer.metadata.title,
-          artist: buffer.metadata.artist,
-          year: '',
-          img: '',
-          album: buffer.metadata.album,
-          duration: buffer.metadata.duration,
-          playlistId: cloneProgress.value.newPlaylistId, // Use a nova playlist criada
-          data: fullData
-        };
-        
-        // Save song
-        await playlistService.addSong(song);
-        console.log('[P2PView] ✅ Song saved:', song.title);
-        
-        // Update progress
-        cloneProgress.value.current++;
-        const newPercent = Math.round((cloneProgress.value.current / cloneProgress.value.total) * 100);
-        cloneProgress.value.percent = newPercent;
-        cloneProgress.value.currentSong = song.title;
-        
-        console.log(`[P2PView] 📊 Progress: ${cloneProgress.value.current}/${cloneProgress.value.total} (${newPercent}%)`);
-        
-        // Calculate time remaining
-        if (cloneProgress.value.current < cloneProgress.value.total) {
-          const elapsed = Date.now() - cloneProgress.value.startTime;
-          const avgTimePerSong = elapsed / cloneProgress.value.current;
-          const remaining = avgTimePerSong * (cloneProgress.value.total - cloneProgress.value.current);
-          cloneProgress.value.timeRemaining = formatTime(remaining);
-          console.log('[P2PView] ⏱️ Time remaining:', cloneProgress.value.timeRemaining);
-        } else {
-          cloneProgress.value.timeRemaining = 'Finalizando...';
+        try {
+          const fullDataUrl = buffer.chunks.join('');
+          console.log(`[P2PView] 🛠️ Reconstructing: ${buffer.metadata.title} (${fullDataUrl.length} chars)`);
+          
+          // Optimized Base64 to Blob conversion (more robust than fetch for giant strings)
+          const parts = fullDataUrl.split(',');
+          const mime = parts[0].match(/:(.*?);/)?.[1] || buffer.metadata.mimeType || 'audio/mpeg';
+          const b64Data = parts[1];
+          
+          const sliceSize = 512;
+          const byteCharacters = atob(b64Data);
+          const byteArrays = [];
+
+          for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+            const slice = byteCharacters.slice(offset, offset + sliceSize);
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+              byteNumbers[i] = slice.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+          }
+
+          const audioBlob = new Blob(byteArrays, { type: mime });
+          console.log(`[P2PView] 📦 Blob: ${audioBlob.size} bytes, ${audioBlob.type}`);
+
+          const song: Omit<Song, 'id'> = {
+            title: buffer.metadata.title,
+            artist: buffer.metadata.artist,
+            year: '',
+            img: '',
+            album: buffer.metadata.album,
+            duration: buffer.metadata.duration,
+            playlistId: cloneProgress.value.newPlaylistId, 
+            data: audioBlob
+          };
+          
+          await playlistService.addSong(song);
+          console.log('[P2PView] ✅ Saved to IndexedDB');
+          
+          cloneProgress.value.current++;
+          const newPercent = Math.round((cloneProgress.value.current / cloneProgress.value.total) * 100);
+          cloneProgress.value.percent = newPercent;
+          cloneProgress.value.currentSong = song.title;
+          
+          if (cloneProgress.value.current < cloneProgress.value.total) {
+            const elapsed = Date.now() - cloneProgress.value.startTime;
+            const avgTimePerSong = elapsed / cloneProgress.value.current;
+            const remaining = avgTimePerSong * (cloneProgress.value.total - cloneProgress.value.current);
+            cloneProgress.value.timeRemaining = formatTime(remaining);
+          } else {
+            cloneProgress.value.timeRemaining = 'Finalizando...';
+          }
+        } catch (err: any) {
+          console.error('[P2PView] ❌ Rebuild error:', err);
+          alert(`Falha ao salvar "${buffer.metadata.title}": ${err.message}`);
+        } finally {
+          songChunksBuffer.delete(key);
         }
-        
-        // Clean up
-        songChunksBuffer.delete(key);
       }
     };
     
@@ -714,6 +829,10 @@ export default defineComponent({
       console.log('[P2PView] ✅ Clone finalized:', songsCloned, 'songs actually saved');
       cloneProgress.value.active = false;
       
+      // Cleanup locks
+      releaseWakeLock();
+      stopStaleCheck();
+
       alert(`Playlist "${payload.playlistName}" clonada com sucesso! ${songsCloned} música${songsCloned !== 1 ? 's' : ''} adicionada${songsCloned !== 1 ? 's' : ''}.`);
       songChunksBuffer.clear();
     };
