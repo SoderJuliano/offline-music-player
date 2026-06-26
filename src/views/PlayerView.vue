@@ -839,7 +839,7 @@ function closeSongEditor() {
           />
 
           <div class="player-controls">
-            <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../../vinyl.png" alt="Vinyl Spinner" />
+            <img :class="isPlaying ? 'vinyl-gif vinyl-gif-running' : 'vinyl-gif'" src="../vinyl.webp" alt="Vinyl Spinner" width="65" height="65" decoding="async" fetchpriority="high" />
             <div class="controls">
               <button @click="prevTrack" title="Anterior" class="control-prev">⏪</button>
               <button

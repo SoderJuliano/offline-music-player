@@ -25,7 +25,10 @@
 #app-container {
   display: flex;
   height: 100vh;
-  background-image: url('../img.jpg');
+  /* Cor solida no tom do fundo: pinta instantaneo enquanto o webp (leve) carrega,
+     evitando flash branco no iPhone. */
+  background-color: #0b1a2b;
+  background-image: url('../img.webp');
   background-size: cover;
   background-position: center;
   color: white;
