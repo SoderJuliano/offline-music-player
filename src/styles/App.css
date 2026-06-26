@@ -713,8 +713,21 @@
   }
 
   .player-main h1 {
-    font-size: 1.0em;
+    /* -10%: encolhe a primeira linha (nome do player) para sobrar espaco vertical */
+    font-size: 0.9em;
     margin: 2px 0px 0px 0px;
+  }
+
+  /* -10%: encolhe os icones de mapa e instalar (primeira linha) */
+  .p2p-menu-btn,
+  .install-menu-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 1.35em;
+  }
+
+  .install-menu-btn {
+    left: 62px;
   }
 
   .subtitle {
@@ -726,16 +739,21 @@
     margin: 3px 0;
   }
 
+  /* -10%: encolhe o disco (vinil) da parte de baixo */
+  .vinyl-gif {
+    height: 58px;
+  }
+
   .controls button {
-    font-size: 1em !important;
-    min-width: 34px !important;
-    min-height: 34px !important;
+    font-size: 0.9em !important;
+    min-width: 31px !important;
+    min-height: 31px !important;
   }
 
   .controls .play-pause-btn {
-    font-size: 1.4em !important;
-    min-width: 44px !important;
-    min-height: 44px !important;
+    font-size: 1.26em !important;
+    min-width: 40px !important;
+    min-height: 40px !important;
   }
 }
 
