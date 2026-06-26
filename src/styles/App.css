@@ -103,6 +103,9 @@
   white-space: nowrap;
   display: inline-block;
   width: max-content;
+  /* line-height folgado evita que o iOS corte os descendentes (g, ç, p)
+     dentro do overflow:hidden do wrapper */
+  line-height: 1.4;
 }
 
 .song-title-wrapper {
@@ -110,6 +113,9 @@
   width: 100%;
   display: flex;
   justify-content: center;
+  /* folga vertical dentro da caixa que recorta o marquee, para os
+     descendentes das letras nao serem cortados no iPhone */
+  padding: 4px 0;
 }
 
 @media (max-width: 768px) {
