@@ -1,61 +1,97 @@
 <template>
   <router-view />
+
+  <!-- Global Toast Notification -->
+  <div v-if="transferService.toastMessage.value" 
+       :class="['global-toast', `toast-${transferService.toastMessage.value.type}`]">
+    <span>{{ transferService.toastMessage.value.text }}</span>
+  </div>
+
+  <!-- Global Floating Transfer Status Bar (visible across Player and Map) -->
+  <div v-if="transferService.incoming.active" class="floating-transfer-pill incoming">
+    <div class="pill-content">
+      <div class="pill-header">
+        <span class="pill-title">⬇️ <strong>{{ transferService.incoming.playlistName }}</strong></span>
+        <span class="pill-percent">{{ transferService.incoming.overallPercent }}%</span>
+      </div>
+      <div class="pill-progress-bg">
+        <div class="pill-progress-bar" :style="{ width: transferService.incoming.overallPercent + '%' }"></div>
+      </div>
+      <div class="pill-details">
+        <span class="pill-song">{{ transferService.incoming.currentSongTitle }}</span>
+        <span class="pill-time" v-if="transferService.incoming.timeRemaining">{{ transferService.incoming.timeRemaining }}</span>
+      </div>
+    </div>
+    <button class="pill-cancel-btn" @click="transferService.cancelIncomingTransfer" title="Cancelar download">✕</button>
+  </div>
+
+  <!-- Outgoing Transfer Indicator -->
+  <div v-if="transferService.outgoing.active" class="floating-transfer-pill outgoing">
+    <div class="pill-content">
+      <div class="pill-header">
+        <span class="pill-title">⬆️ Enviando <strong>{{ transferService.outgoing.playlistName }}</strong></span>
+        <span class="pill-percent">{{ transferService.outgoing.overallPercent }}%</span>
+      </div>
+      <div class="pill-progress-bg">
+        <div class="pill-progress-bar outgoing-bar" :style="{ width: transferService.outgoing.overallPercent + '%' }"></div>
+      </div>
+      <div class="pill-details">
+        <span class="pill-song">{{ transferService.outgoing.currentSongTitle }}</span>
+      </div>
+    </div>
+    <button class="pill-cancel-btn" @click="transferService.cancelOutgoingTransfer" title="Cancelar envio">✕</button>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue';
 import { p2pService } from './services/p2p';
+import { transferService } from './services/transfer';
+import { PlaylistService } from './services/playlist';
 
 // Detectar tipo de dispositivo
-const isMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
 const deviceType = isMobile ? 'phone' : 'desktop';
+const playlistService = new PlaylistService();
 
-// Inicializar P2P em background quando app carrega
 onMounted(async () => {
-  console.log('[App] Initializing P2P service in background...');
+  console.log('[App] Initializing P2P and Transfer services...');
   
   // Inicializar serviço P2P
   await p2pService.init();
-  
-  // Enviar localização se disponível
+
+  // Enviar localização inicial se disponível
   if ('geolocation' in navigator) {
     navigator.geolocation.getCurrentPosition(pos => {
       const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      console.log('[App] Geolocation obtained, broadcasting to all peers');
-      
-      // Enviar para todos os peers conectados
       p2pService.getAllPeerIds().forEach(peerId => {
         p2pService.sendTo(peerId, { 
           type: 'location', 
           payload: { ...location, device: deviceType } 
         });
       });
-
-      // Também publicar via Ably broadcast para alcançar todos imediatamente
       p2pService.broadcast({ type: 'location', payload: { ...location, device: deviceType } });
     }, (error) => {
-      console.warn('[App] Geolocation error:', error.message);
+      console.warn('[App] Geolocation initial query notice:', error.message);
     }, {
-      enableHighAccuracy: false, // Menos preciso mas mais rápido
-      timeout: 5000, // 5 segundos de timeout
-      maximumAge: 60000 // Aceitar cache de até 1 minuto
+      enableHighAccuracy: false,
+      timeout: 5000,
+      maximumAge: 60000
     });
   }
-  
-  // Quando conectar com novo peer, enviar localização
+
+  // Ao conectar com novo peer, trocar localização automaticamente
   p2pService.onConnect = (peerId) => {
-    console.log('[App] ✅ New peer connected:', peerId, '- sending location automatically');
+    console.log('[App] ✅ New peer connected:', peerId);
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(pos => {
         const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        console.log('[App] 📤 Auto-sending location to new peer:', peerId, location);
         p2pService.sendTo(peerId, { 
           type: 'location', 
           payload: { ...location, device: deviceType } 
         });
-        console.log('[App] ✅ Auto-location sent to:', peerId);
       }, (error) => {
-        console.error('[App] ❌ Geolocation error on connect:', error.message);
+        console.warn('[App] Geolocation on connect notice:', error.message);
       }, {
         enableHighAccuracy: false,
         timeout: 5000,
@@ -63,81 +99,28 @@ onMounted(async () => {
       });
     }
   };
-  
-  // Sistema de broadcast de eventos para views
-  const dataHandlers: Array<(peerId: string, data: any) => Promise<void> | void> = [];
-  
-  (p2pService as any).addDataHandler = (handler: (peerId: string, data: any) => Promise<void> | void) => {
-    dataHandlers.push(handler);
-    console.log('[App] ✅ Data handler added, total handlers:', dataHandlers.length);
-  };
-  
-  (p2pService as any).removeDataHandler = (handler: (peerId: string, data: any) => Promise<void> | void) => {
-    const index = dataHandlers.indexOf(handler);
-    if (index > -1) dataHandlers.splice(index, 1);
-  };
-  
-  // Responder a pedidos de localização e playlists
-  const pendingAcks = new Map<string, (val: boolean) => void>();
-  let wakeLock: any = null;
 
-  const requestWakeLock = async () => {
-    if ('wakeLock' in navigator) {
-      try {
-        wakeLock = await (navigator as any).wakeLock.request('screen');
-        console.log('[App] 💡 Sender Wake Lock active');
-      } catch (err) {
-        console.warn('[App] Wake Lock error:', err);
-      }
-    }
-  };
+  // Handler mestre de dados
+  p2pService.addDataHandler(async (peerId: string, data: any) => {
+    console.log('[App] 📨 Received message:', data.type, 'from:', peerId);
 
-  const releaseWakeLock = () => {
-    if (wakeLock) {
-      wakeLock.release().then(() => {
-        wakeLock = null;
-        console.log('[App] 😴 Sender Wake Lock released');
-      });
-    }
-  };
-
-  p2pService.onData = async (peerId, data) => {
-    console.log('[App] 📨 Received data:', data.type, 'from', peerId);
-    
-    if (data.type === 'chunk-ack') {
-      const ackKey = `${peerId}-${data.payload.songIndex}-${data.payload.chunkIndex}`;
-      const resolver = pendingAcks.get(ackKey);
-      if (resolver) {
-        resolver(true);
-        pendingAcks.delete(ackKey);
-      }
+    // 1. Delegar mensagens de transferência para o TransferService
+    const handledByTransfer = await transferService.handleMessage(peerId, data);
+    if (handledByTransfer) {
       return;
     }
 
-    console.log('[App] Broadcasting to', dataHandlers.length, 'handler(s)');
-    
-    // Broadcast para todos os handlers registrados (P2PView, etc)
-    for (const handler of dataHandlers) {
-      try {
-        await handler(peerId, data);
-      } catch (error) {
-        console.error('[App] Error in data handler:', error);
-      }
-    }
-    
+    // 2. Outras requisições P2P (localização, metadados de playlists)
     if (data.type === 'request-location') {
-      console.log('[App] 📍 Peer', peerId, 'requested location, sending...');
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(pos => {
           const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          console.log('[App] 📤 Sending location to', peerId, ':', location, 'device:', deviceType);
           p2pService.sendTo(peerId, { 
             type: 'location', 
             payload: { ...location, device: deviceType } 
           });
-          console.log('[App] ✅ Location sent successfully');
         }, (error) => {
-          console.error('[App] ❌ Geolocation error:', error.message);
+          console.warn('[App] Geolocation request error:', error.message);
         }, {
           enableHighAccuracy: false,
           timeout: 5000,
@@ -145,11 +128,7 @@ onMounted(async () => {
         });
       }
     } else if (data.type === 'request-playlists') {
-      // Importar PlaylistService dinamicamente para evitar problemas
-      console.log('[App] 📋 Peer requested playlists, responding with counts only...');
       try {
-        const { PlaylistService } = await import('./services/playlist');
-        const playlistService = new PlaylistService();
         const playlists = await playlistService.loadPlaylists();
         const playlistsBasic = [] as Array<{ id?: number; name: string; songCount: number }>;
         for (const p of playlists) {
@@ -158,118 +137,10 @@ onMounted(async () => {
         }
         p2pService.sendTo(peerId, { type: 'playlists-response', payload: { playlists: playlistsBasic } });
       } catch (error) {
-        console.error('[App] Error loading playlists:', error);
-      }
-    } else if (data.type === 'request-clone') {
-      console.log('[App] 💾 Peer requested clone of playlist', data.payload.playlistId);
-      try {
-        await requestWakeLock();
-        const { PlaylistService } = await import('./services/playlist');
-        const playlistService = new PlaylistService();
-        const playlist = await playlistService.getPlaylistWithSongs(data.payload.playlistId);
-        
-        if (!playlist || !playlist.songs.length) {
-          p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Playlist vazia ou não encontrada' } });
-          releaseWakeLock();
-          return;
-        }
-        
-        // Send metadata first
-        p2pService.sendTo(peerId, { 
-          type: 'clone-start', 
-          payload: { 
-            playlistName: playlist.name,
-            totalSongs: playlist.songs.length
-          } 
-        });
-        
-        for (let i = 0; i < playlist.songs.length; i++) {
-          const song = playlist.songs[i];
-          let dataStr = '';
-          
-          if (song.data instanceof Blob) {
-            dataStr = await new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.readAsDataURL(song.data as Blob);
-            });
-          } else {
-            dataStr = song.data as string;
-          }
-
-          // Use smaller chunks for transport reliability (16KB is safe)
-          const CHUNK_SIZE = 16 * 1024;
-          const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
-          
-          // Extrair MIME type
-          let mimeType = 'audio/mpeg';
-          if (dataStr.startsWith('data:')) {
-            const match = dataStr.match(/^data:([^;]+);/);
-            if (match) mimeType = match[1];
-          }
-
-          p2pService.sendTo(peerId, {
-            type: 'clone-song-meta',
-            payload: {
-              songIndex: i,
-              title: song.title,
-              artist: song.artist,
-              album: song.album,
-              duration: song.duration,
-              playlistId: song.playlistId,
-              totalChunks,
-              mimeType
-            }
-          });
-          
-          // Send chunks
-          for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-            const start = chunkIndex * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, dataStr.length);
-            const chunk = dataStr.substring(start, end);
-            
-            p2pService.sendTo(peerId, {
-              type: 'clone-song-chunk',
-              payload: {
-                songIndex: i,
-                chunkIndex,
-                totalChunks,
-                data: chunk
-              }
-            });
-
-            // Flow control
-            if (chunkIndex % 15 === 0 && chunkIndex > 0) {
-              const ackKey = `${peerId}-${i}-${chunkIndex}`;
-              const ackReceived = new Promise((resolve) => {
-                pendingAcks.set(ackKey, resolve as any);
-                setTimeout(() => {
-                  if (pendingAcks.has(ackKey)) {
-                    resolve(false);
-                    pendingAcks.delete(ackKey);
-                  }
-                }, 8000);
-              });
-              await ackReceived;
-            }
-            await new Promise(resolve => setTimeout(resolve, 8));
-          }
-        }
-        
-        p2pService.sendTo(peerId, { 
-          type: 'clone-complete', 
-          payload: { playlistName: playlist.name } 
-        });
-      } catch (error) {
-        console.error('[App] Error handling clone request:', error);
-        p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Erro ao processar clonagem' } });
-      } finally {
-        releaseWakeLock();
+        console.error('[App] Error loading playlists for peer:', error);
       }
     } else if (data.type === 'request-playlist-songs-meta') {
       try {
-        const { PlaylistService } = await import('./services/playlist');
-        const playlistService = new PlaylistService();
         const playlistId = data.payload.playlistId;
         const page = data.payload.page ?? 1;
         const pageSize = data.payload.pageSize ?? 10;
@@ -285,100 +156,14 @@ onMounted(async () => {
         const total = await playlistService.getPlaylistSongCount(playlistId);
         p2pService.sendTo(peerId, { type: 'playlist-songs-meta', payload: { playlistId, page, pageSize, total, songs: songsBasic } });
       } catch (error) {
-        console.error('[App] Error sending songs meta:', error);
-      }
-    } else if (data.type === 'request-song') {
-      try {
-        await requestWakeLock();
-        const { PlaylistService } = await import('./services/playlist');
-        const playlistService = new PlaylistService();
-        const idx = data.payload.songIndex;
-        const playlistId = data.payload.playlistId;
-        const song = await playlistService.getSongByIndex(playlistId, idx);
-        if (!song) {
-          p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Música não encontrada.' } });
-          releaseWakeLock();
-          return;
-        }
-
-        p2pService.sendTo(peerId, { 
-          type: 'clone-start', 
-          payload: { 
-            playlistName: 'Playlist',
-            totalSongs: 1
-          } 
-        });
-
-        let dataStr = '';
-        if (song.data instanceof Blob) {
-          dataStr = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(song.data as Blob);
-          });
-        } else {
-          dataStr = song.data as string;
-        }
-
-        const CHUNK_SIZE = 16 * 1024;
-        const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
-
-        p2pService.sendTo(peerId, {
-          type: 'clone-song-meta',
-          payload: {
-            songIndex: 0,
-            title: song.title,
-            artist: song.artist,
-            album: song.album,
-            duration: song.duration,
-            playlistId: song.playlistId,
-            totalChunks
-          }
-        });
-
-        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-          const start = chunkIndex * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, dataStr.length);
-          const chunk = dataStr.substring(start, end);
-          p2pService.sendTo(peerId, {
-            type: 'clone-song-chunk',
-            payload: {
-              songIndex: 0,
-              chunkIndex,
-              totalChunks,
-              data: chunk
-            }
-          });
-
-          if (chunkIndex % 15 === 0 && chunkIndex > 0) {
-            const ackKey = `${peerId}-0-${chunkIndex}`;
-            const ackReceived = new Promise((resolve) => {
-              pendingAcks.set(ackKey, resolve as any);
-              setTimeout(() => {
-                if (pendingAcks.has(ackKey)) {
-                  resolve(false);
-                  pendingAcks.delete(ackKey);
-                }
-              }, 8000);
-            });
-            await ackReceived;
-          }
-          await new Promise(resolve => setTimeout(resolve, 8));
-        }
-
-        p2pService.sendTo(peerId, { type: 'clone-complete', payload: { playlistName: 'Playlist' } });
-      } catch (error) {
-        console.error('[App] Error handling single-song request:', error);
-        p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Erro ao processar música' } });
-      } finally {
-        releaseWakeLock();
+        console.error('[App] Error sending songs meta to peer:', error);
       }
     }
-  };
+  });
 });
 
 onUnmounted(() => {
-  console.log('[App] App unmounted, but P2P service remains active');
+  console.log('[App] App unmounted');
 });
 </script>
 
@@ -389,11 +174,173 @@ html, body {
   padding: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden; /* Prevents scrollbars from appearing due to router transitions */
+  overflow: hidden;
 }
 
 #app {
   width: 100%;
   height: 100%;
+}
+
+/* Global Toast */
+.global-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 10px 20px;
+  border-radius: 30px;
+  font-size: 14px;
+  font-weight: 500;
+  color: white;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+  animation: toast-in 0.3s ease-out;
+  pointer-events: none;
+  max-width: 90vw;
+  text-align: center;
+}
+
+.toast-info {
+  background: rgba(30, 58, 138, 0.9);
+  border: 1px solid rgba(96, 165, 250, 0.5);
+}
+
+.toast-success {
+  background: rgba(22, 101, 52, 0.9);
+  border: 1px solid rgba(74, 222, 128, 0.5);
+}
+
+.toast-error {
+  background: rgba(153, 27, 27, 0.9);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Floating Transfer Status Pill */
+.floating-transfer-pill {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 8000;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  backdrop-filter: blur(12px);
+  color: white;
+  border-radius: 14px;
+  padding: 12px 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 260px;
+  max-width: 380px;
+  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.floating-transfer-pill.outgoing {
+  border-color: rgba(168, 85, 247, 0.5);
+}
+
+.pill-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pill-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.pill-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.pill-percent {
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.floating-transfer-pill.outgoing .pill-percent {
+  color: #c084fc;
+}
+
+.pill-progress-bg {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pill-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width 0.2s ease;
+}
+
+.pill-progress-bar.outgoing-bar {
+  background: linear-gradient(90deg, #9333ea, #c084fc);
+}
+
+.pill-details {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.pill-song {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.pill-cancel-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #94a3b8;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.pill-cancel-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 600px) {
+  .floating-transfer-pill {
+    left: 15px;
+    right: 15px;
+    bottom: 15px;
+    max-width: none;
+  }
 }
 </style>

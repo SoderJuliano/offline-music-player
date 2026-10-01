@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, defineAsyncComponent, h, watch }
 import { type Song } from '../services/db'
 import { PlaylistService, type PlaylistWithSongs } from '../services/playlist'
 import { PlaybackService } from '../services/playback'
+import { transferService } from '../services/transfer'
 import SeekBar from '../components/SeekBar.vue'
 import '../styles/App.css'
 
@@ -346,6 +347,16 @@ watch(
   () => currentSongIndex.value,
   () => {
     void prefetchMoreSongsIfNeeded()
+  },
+)
+
+watch(
+  () => transferService.incoming.status,
+  async (newStatus) => {
+    if (newStatus === 'completed') {
+      console.log('[PlayerView] Transfer completed, reloading playlists...');
+      await loadPlaylists();
+    }
   },
 )
 

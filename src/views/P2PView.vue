@@ -25,29 +25,45 @@
       </div>
     </div>
     
-    <!-- Debug overlay desabilitado para evitar travamentos -->
-    <div v-if="cloneProgress.active" class="clone-overlay">
+    <!-- Clone Progress Overlay -->
+    <div v-if="transferService.incoming.active" class="clone-overlay">
       <div class="clone-progress-card">
-        <h3>🎵 Clonando Playlist</h3>
-        <p><strong>{{ cloneProgress.playlistName }}</strong></p>
+        <h3>🎵 Baixando Playlist</h3>
+        <p class="playlist-title"><strong>{{ transferService.incoming.playlistName }}</strong></p>
+        
         <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: cloneProgress.percent + '%' }"></div>
+          <div class="progress-fill" :style="{ width: transferService.incoming.overallPercent + '%' }"></div>
         </div>
-        <p><strong>Música {{ cloneProgress.current }} de {{ cloneProgress.total }}</strong> ({{ cloneProgress.percent }}%)</p>
-        <p v-if="cloneProgress.currentSong" class="current-song">{{ cloneProgress.currentSong }}</p>
-        <p class="time-estimate" v-if="cloneProgress.timeRemaining">⏱️ {{ cloneProgress.timeRemaining }}</p>
+        
+        <p class="progress-stats">
+          <strong>Música {{ transferService.incoming.currentSongIndex }} de {{ transferService.incoming.totalSongs }}</strong>
+          ({{ transferService.incoming.overallPercent }}%)
+        </p>
+        
+        <p v-if="transferService.incoming.currentSongTitle" class="current-song">
+          🎶 {{ transferService.incoming.currentSongTitle }}
+        </p>
+        
+        <div class="transfer-footer">
+          <p class="time-estimate" v-if="transferService.incoming.timeRemaining">
+            ⏱️ {{ transferService.incoming.timeRemaining }}
+          </p>
+          <button class="cancel-transfer-btn" @click="transferService.cancelIncomingTransfer">
+            Cancelar Transferência
+          </button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, onUnmounted, ref, watch } from 'vue';
+import { defineComponent, onMounted, onUnmounted, ref } from 'vue';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { p2pService } from '../services/p2p';
-import { PlaylistService } from '../services/playlist';
-import type { Song } from '@/services/db';
+import { transferService } from '../services/transfer';
+
 // Basic device detection
 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 const localDeviceType = isMobile ? 'phone' : 'desktop';
@@ -64,7 +80,6 @@ export default defineComponent({
     const localUserId = ref('');
     const userLocation = ref<{ lat: number, lng: number } | null>(null);
     const peerMarkers = new Map<string, L.Marker>();
-    const playlistService = new PlaylistService();
     let locationInterval: any = null;
     let syncInterval: any = null;
     
@@ -98,110 +113,32 @@ export default defineComponent({
         marker.openPopup();
       }
     };
-    
-    // Debug logs visiveis na tela (DESABILITADO)
-    const debugLogs = ref<string[]>([]);
-    const addDebugLog = (msg: string) => {
-      // Desabilitado para evitar travamentos
-      // const timestamp = new Date().toLocaleTimeString();
-      // debugLogs.value.push(`[${timestamp}] ${msg}`);
-      // if (debugLogs.value.length > 10) debugLogs.value.shift();
-      console.log('[DEBUG]', msg);
-    };
-    
-    // Clone progress state
-    const cloneProgress = ref({
-      active: false,
-      playlistName: '',
-      current: 0,
-      total: 0,
-      percent: 0,
-      currentSong: '',
-      timeRemaining: '',
-      startTime: 0,
-      newPlaylistId: 0,
-      sourcePeerId: ''
-    });
-    
-    // Buffer for receiving chunked songs
-    const songChunksBuffer = new Map<string, { chunks: string[], totalChunks: number, metadata: any, receivedCount: number, processed?: boolean }>();
-
-    // Wake Lock to prevent screen sleep during transfer
-    let wakeLock: any = null;
-    const requestWakeLock = async () => {
-      if ('wakeLock' in navigator) {
-        try {
-          wakeLock = await (navigator as any).wakeLock.request('screen');
-          console.log('[P2PView] 💡 Screen Wake Lock is active');
-        } catch (err: any) {
-          console.warn(`[P2PView] Wake Lock error: ${err.name}, ${err.message}`);
-        }
-      }
-    };
-
-    const releaseWakeLock = () => {
-      if (wakeLock) {
-        wakeLock.release().then(() => {
-          wakeLock = null;
-          console.log('[P2PView] 😴 Screen Wake Lock released');
-        });
-      }
-    };
-
-    // Stale transfer detection
-    let staleCheckInterval: any = null;
-    let lastActivityTime = 0;
-
-    const startStaleCheck = () => {
-      lastActivityTime = Date.now();
-      if (staleCheckInterval) clearInterval(staleCheckInterval);
-      staleCheckInterval = setInterval(() => {
-        if (cloneProgress.value.active && Date.now() - lastActivityTime > 60000) {
-          console.error('[P2PView] ❌ Transfer timed out (60s no data)');
-          cloneProgress.value.active = false;
-          alert('Transferência interrompida: a conexão está muito lenta ou foi perdida.');
-          stopStaleCheck();
-          releaseWakeLock();
-        }
-      }, 10000);
-    };
-
-    const stopStaleCheck = () => {
-      if (staleCheckInterval) {
-        clearInterval(staleCheckInterval);
-        staleCheckInterval = null;
-      }
-    };
 
     const addMyMarkerToMap = (location: { lat: number, lng: number }) => {
       if (!map) return;
       const myIcon = localDeviceType === 'phone' ? phoneIcon : desktopIcon;
       const myMarker = L.marker(location, { 
         icon: myIcon,
-        zIndexOffset: 1000 // Garantir que fique acima dos outros
+        zIndexOffset: 1000
       }).addTo(map);
       myMarker.bindPopup('👉 Você está aqui!').openPopup();
-      console.log('[P2PView] ✅ My marker added to map at', location);
       return myMarker;
     };
 
     const checkGeolocationPermission = async (): Promise<string> => {
       if (!('permissions' in navigator)) {
-        return 'prompt'; // Assume prompt if not supported
+        return 'prompt';
       }
       try {
         const result = await navigator.permissions.query({ name: 'geolocation' });
         return result.state;
       } catch (e) {
-        console.warn('[P2PView] Permission query failed:', e);
         return 'prompt';
       }
     };
 
     const requestGeolocation = async (retryCount = 0): Promise<void> => {
       if (!('geolocation' in navigator)) {
-        console.warn('[P2PView] Geolocation not supported');
-        // Fallback: adicionar marker em localização padrão
         const defaultLocation = { lat: -27.59, lng: -48.54 };
         userLocation.value = defaultLocation;
         addMyMarkerToMap(defaultLocation);
@@ -209,11 +146,8 @@ export default defineComponent({
       }
 
       const permissionState = await checkGeolocationPermission();
-      console.log('[P2PView] Geolocation permission state:', permissionState);
 
       if (permissionState === 'denied') {
-        console.warn('[P2PView] Geolocation permission denied');
-        addDebugLog('❌ Permissão de localização negada. Usando localização padrão.');
         const defaultLocation = { lat: -27.59, lng: -48.54 };
         userLocation.value = defaultLocation;
         if (map) {
@@ -223,115 +157,52 @@ export default defineComponent({
         return;
       }
 
-      if (permissionState === 'granted') {
-        // Permission already granted, get position without prompting
-        addDebugLog('✅ Permissão já concedida, obtendo localização...');
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            userLocation.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            addDebugLog(`✅ Localização obtida: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
-            console.log('[P2PView] Geolocation obtained:', userLocation.value);
-            map!.setView(userLocation.value, 15);
-            addMyMarkerToMap(userLocation.value);
-          },
-          (error) => {
-            console.error("[P2PView] Geolocation error:", error.message, error.code);
-            addDebugLog(`❌ Erro ao obter localização: ${error.message}`);
-            const defaultLocation = { lat: -27.59, lng: -48.54 };
-            userLocation.value = defaultLocation;
-            if (map) {
-              map.setView(defaultLocation, 13);
-              addMyMarkerToMap(defaultLocation);
-            }
-          },
-          {
-            enableHighAccuracy: false,
-            timeout: 10000,
-            maximumAge: 60000
-          }
-        );
-        return;
-      }
-
-      // permissionState === 'prompt', so ask for permission
-      addDebugLog('📍 Pedindo permissão de localização...');
-      console.log('[P2PView] Requesting geolocation permission... (attempt', retryCount + 1, ')');
-      
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           userLocation.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          addDebugLog(`✅ Localização obtida: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
-          console.log('[P2PView] Geolocation obtained:', userLocation.value);
-          map!.setView(userLocation.value, 15);
-          addMyMarkerToMap(userLocation.value);
+          if (map) {
+            map.setView(userLocation.value, 15);
+            addMyMarkerToMap(userLocation.value);
+          }
         }, 
         (error) => {
-          console.error("[P2PView] Geolocation error:", error.message, error.code);
-          addDebugLog(`❌ Erro de localização: ${error.message}`);
-          
-          // Mostrar alerta ao usuário
-          if (retryCount === 0) {
-            if (error.code === 1) { // PERMISSION_DENIED
-              alert('⚠️ Permissão de localização negada.\n\nSeu dispositivo será mostrado em uma localização padrão.\n\nPara compartilhar sua localização real, permita o acesso nas configurações do navegador.');
-            } else if (error.code === 3) { // TIMEOUT
-              console.warn('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
-              addDebugLog('⚠️ Tempo esgotado ao obter localização. Usando localização padrão.');
-            }
-          }
-          
-          // Adicionar marker em localização padrão mesmo com erro
+          console.warn("[P2PView] Geolocation notice:", error.message);
           const defaultLocation = { lat: -27.59, lng: -48.54 };
           userLocation.value = defaultLocation;
           if (map) {
             map.setView(defaultLocation, 13);
             addMyMarkerToMap(defaultLocation);
           }
-          
-          // Retry uma vez se não for permissão negada
           if (retryCount < 1 && error.code !== 1) {
-            console.log('[P2PView] Retrying geolocation in 3s...');
             setTimeout(() => requestGeolocation(retryCount + 1), 3000);
           }
         }, 
         {
           enableHighAccuracy: false,
-          timeout: 10000, // Aumentado de 5s para 10s
+          timeout: 10000,
           maximumAge: 60000
         }
       );
     };
     
-    // Declarar dataHandler fora de onMounted para poder remover no onUnmounted
     let dataHandler: ((peerId: string, data: any) => Promise<void>) | null = null;
 
     onMounted(async () => {
-      addDebugLog('🗺️ Mapa montado');
       map = L.map('map').setView([-27.59, -48.54], 13);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       }).addTo(map);
 
-      // Solicitar geolocalização com retry
       await requestGeolocation();
 
       localUserId.value = p2pService.getLocalId();
-      addDebugLog(`🆔 Meu ID: ${localUserId.value.substring(0, 8)}`);
-      
-      // Atualizar contador de peers conectados
       connectedPeersCount.value = p2pService.getAllPeerIds().length;
-      addDebugLog(`👥 Peers já conectados: ${connectedPeersCount.value}`);
 
-      // Usar sistema de handlers em vez de sobrescrever callbacks
+      // Data handler para atualizar o mapa e popups
       dataHandler = async (peerId: string, data: any) => {
-        console.log('[P2PView] Received data from', peerId, ':', data.type);
-        addDebugLog(`📨 ← ${peerId.substring(0, 8)}: ${data.type}`);
-        
         switch (data.type) {
           case 'location':
-            addDebugLog(`📍 ← ${peerId.substring(0, 8)}: location`);
-            console.log('[P2PView] 📍 Received location from', peerId, data.payload);
             updateMarker(peerId, data.payload);
-            console.log('[P2PView] ✅ Marker updated for', peerId, '- Total markers:', peerMarkers.size);
             break;
           case 'playlists-response':
             showPlaylistsInPopup(peerId, data.payload.playlists);
@@ -339,107 +210,18 @@ export default defineComponent({
           case 'playlist-songs-meta':
             showSongsInPopup(peerId, data.payload.playlistId, data.payload.songs || [], data.payload.page || 1, data.payload.pageSize || 10, data.payload.total || (data.payload.songs || []).length);
             break;
-          case 'clone-start':
-            // Criar nova playlist com nome formatado
-            const newPlaylistName = `[${peerId.substring(0, 8)}] ${data.payload.playlistName}`;
-            const newPlaylistId = await playlistService.addPlaylist(newPlaylistName);
-            
-            console.log('[P2PView] 🆕 Clone started:', newPlaylistName, 'ID:', newPlaylistId, 'Songs:', data.payload.totalSongs);
-            
-            // Prevent screen from sleeping during transfer
-            await requestWakeLock();
-            startStaleCheck();
-
-            cloneProgress.value = {
-              active: true,
-              playlistName: newPlaylistName,
-              current: 0,
-              total: data.payload.totalSongs,
-              percent: 0,
-              currentSong: 'Aguardando primeira música...',
-              timeRemaining: 'Calculando...',
-              startTime: Date.now(),
-              newPlaylistId: newPlaylistId,
-              sourcePeerId: peerId
-            };
-            
-            console.log('[P2PView] Progress initialized:', cloneProgress.value);
-            break;
-          case 'clone-song-meta':
-            const key = `${peerId}-${data.payload.songIndex}`;
-            if (!songChunksBuffer.has(key)) {
-              songChunksBuffer.set(key, { 
-                chunks: new Array(data.payload.totalChunks), 
-                totalChunks: data.payload.totalChunks, 
-                metadata: data.payload,
-                receivedCount: 0
-              });
-            } else {
-              songChunksBuffer.get(key)!.metadata = data.payload;
-            }
-            break;
-          case 'clone-song-chunk':
-            await handleSongChunk(peerId, data.payload);
-            // Send acknowledgement for large transfers every 10 chunks to prevent overwhelming the sender
-            if (data.payload.chunkIndex % 10 === 0 || data.payload.chunkIndex === data.payload.totalChunks - 1) {
-              p2pService.sendTo(peerId, { 
-                type: 'chunk-ack', 
-                payload: { 
-                  songIndex: data.payload.songIndex, 
-                  chunkIndex: data.payload.chunkIndex 
-                } 
-              });
-            }
-            break;
-          case 'chunk-ack':
-            // Logic handled by the sender in handleCloneRequest/App.vue
-            break;
-          case 'clone-complete':
-            await finalizeClone(peerId, data.payload);
-            break;
-          case 'clone-error':
-            cloneProgress.value.active = false;
-            releaseWakeLock();
-            stopStaleCheck();
-            alert('Erro ao clonar playlist: ' + data.payload.message);
-            songChunksBuffer.clear();
-            break;
         }
       };
       
-      // Registrar handler
-      if ((p2pService as any).addDataHandler) {
-        (p2pService as any).addDataHandler(dataHandler);
-        console.log('[P2PView] ✅ Data handler registered successfully');
-        addDebugLog('✅ Handler registrado');
-      } else {
-        console.error('[P2PView] ❌ addDataHandler not available!');
-        addDebugLog('❌ addDataHandler não disponível!');
-        // Tentar novamente após pequeno atraso (App.vue pode ainda estar inicializando)
-        setTimeout(() => {
-          if ((p2pService as any).addDataHandler) {
-            (p2pService as any).addDataHandler(dataHandler);
-            console.log('[P2PView] ✅ Data handler registered on retry');
-            addDebugLog('✅ Handler registrado (retry)');
-          }
-        }, 1000);
-      }
-      
-      // Guardar callbacks originais
+      p2pService.addDataHandler(dataHandler);
+
       const originalOnConnect = p2pService.onConnect;
       const originalOnDisconnect = p2pService.onDisconnect;
 
       p2pService.onConnect = (peerId) => {
-        console.log('[P2PView] ✅ Peer connected:', peerId);
-        addDebugLog(`✅ Peer conectou: ${peerId.substring(0, 8)}`);
         connectedPeersCount.value++;
         updateDevicesList();
-        
-        // Pedir localização do peer que acabou de conectar
-        addDebugLog(`📤 → ${peerId.substring(0, 8)}: request-location`);
         p2pService.sendTo(peerId, { type: 'request-location' });
-        
-        // Chamar callback original do App.vue também
         if (originalOnConnect) originalOnConnect(peerId);
       };
 
@@ -451,69 +233,37 @@ export default defineComponent({
           peerMarkers.delete(peerId);
           updateDevicesList();
         }
-        // Chamar callback original do App.vue também
         if (originalOnDisconnect) originalOnDisconnect(peerId);
       };
 
-      // Se o serviço ainda não foi inicializado, inicializa aqui
       if (!p2pService.isInitialized()) {
-        console.log('[P2PView] P2P service not initialized yet, initializing...');
         await p2pService.init();
       }
       
       connectedPeersCount.value = p2pService.getAllPeerIds().length;
-      addDebugLog(`👥 Contagem inicial de peers: ${connectedPeersCount.value}`);
       
-      // Aguardar 3 segundos para garantir que conexões WebRTC completem
-      addDebugLog('⏳ Aguardando conexões...');
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Solicitar localização de todos os peers conectados
+      setTimeout(() => {
+        const connectedPeers = p2pService.getAllPeerIds();
+        connectedPeers.forEach(peerId => {
+          p2pService.sendTo(peerId, { type: 'request-location' });
+        });
+      }, 1500);
       
-      // Pedir localização de todos os peers já conectados
-      const connectedPeers = p2pService.getAllPeerIds();
-      addDebugLog(`📤 Pedindo localização de ${connectedPeers.length} peer(s)`);
-      console.log('[P2PView] Connected peers:', connectedPeers);
-      console.log('[P2PView] Requesting location from', connectedPeers.length, 'peer(s)...');
-      
-      connectedPeers.forEach(peerId => {
-        addDebugLog(`📤 → ${peerId.substring(0, 8)}: request-location`);
-        console.log('[P2PView] 📤 Sending request-location to', peerId);
-        p2pService.sendTo(peerId, { type: 'request-location' });
-      });
-      connectedPeersCount.value = connectedPeers.length;
-      
-      // Sync permanente: atualiza contador e lista a cada 3s enquanto a view estiver aberta
+      // Sync periódico
       syncInterval = setInterval(() => {
         const peers = p2pService.getAllPeerIds();
         connectedPeersCount.value = peers.length;
         updateDevicesList();
       }, 3000);
 
-      // Pedir localização para novos peers que ainda não têm marcador (máximo 10 tentativas)
-      let attempts = 0;
-      locationInterval = setInterval(() => {
-        attempts++;
-        if (attempts > 10) {
-          clearInterval(locationInterval);
-          addDebugLog('⚠️ Parou de pedir localização após 10 tentativas');
-          return;
-        }
-        
-        const peers = p2pService.getAllPeerIds();
-        const peersWithoutMarker = peers.filter(id => !peerMarkers.has(id));
-        if (peersWithoutMarker.length > 0) {
-          addDebugLog(`🔄 Tentativa ${attempts}: pedindo localização de ${peersWithoutMarker.length} peer(s)`);
-          peersWithoutMarker.forEach(peerId => {
-            p2pService.sendTo(peerId, { type: 'request-location' });
-          });
-        }
-      }, 5000);
-
+      // Funções expostas para os botões dentro dos popups HTML do Leaflet
       (window as any).requestPlaylists = (peerId: string) => {
         p2pService.sendTo(peerId, { type: 'request-playlists' });
       };
       
       (window as any).clonePlaylistAction = async (peerId: string, playlistId: number) => {
-        p2pService.sendTo(peerId, { type: 'request-clone', payload: { playlistId } });
+        await transferService.requestPlaylistClone(peerId, playlistId);
       };
 
       (window as any).viewPlaylistSongs = (peerId: string, playlistId: number) => {
@@ -525,42 +275,35 @@ export default defineComponent({
         p2pService.sendTo(peerId, { type: 'request-playlist-songs-meta', payload: { playlistId, page: safePage, pageSize: 10 } });
       };
 
-      (window as any).cloneSingleSongAction = (peerId: string, playlistId: number, songIndex: number) => {
-        p2pService.sendTo(peerId, { type: 'request-song', payload: { playlistId, songIndex } });
+      (window as any).cloneSingleSongAction = async (peerId: string, playlistId: number, songIndex: number) => {
+        await transferService.requestSingleSong(peerId, playlistId, songIndex);
       };
     });
 
     onUnmounted(() => {
-      // Remover handler de dados
-      if ((p2pService as any).removeDataHandler) {
-        (p2pService as any).removeDataHandler(dataHandler);
+      if (dataHandler) {
+        p2pService.removeDataHandler(dataHandler);
       }
-      
-      // Limpar intervalos
       if (locationInterval) clearInterval(locationInterval);
       if (syncInterval) clearInterval(syncInterval);
       
-      // NÃO destruir o serviço P2P, deixar rodando em background
-      // Apenas limpar o mapa e funções globais desta view
       map?.remove();
       delete (window as any).requestPlaylists;
       delete (window as any).clonePlaylistAction;
+      delete (window as any).viewPlaylistSongs;
+      delete (window as any).viewPlaylistSongsPage;
+      delete (window as any).cloneSingleSongAction;
     });
 
     const updateMarker = (peerId: string, payload: any) => {
-      if (!map) {
-        console.warn('[P2PView] ⚠️ Cannot update marker - map not initialized');
-        return;
-      }
+      if (!map) return;
       const { lat, lng, device } = payload;
-      console.log('[P2PView] 🗺️ Updating marker:', peerId, 'at', lat, lng, 'device:', device);
       const icon = device === 'phone' ? phoneIcon : desktopIcon;
       
       let finalLatLng = new L.LatLng(lat, lng);
-      
       peerMarkers.forEach((marker, id) => {
         if (marker.getLatLng().equals(finalLatLng) && id !== peerId) {
-          finalLatLng.lat += 0.0001; // Apply offset
+          finalLatLng.lat += 0.0001;
         }
       });
 
@@ -571,17 +314,16 @@ export default defineComponent({
           .addTo(map)
           .bindPopup(`<b>Dispositivo:</b> ${peerId.substring(0, 8)}...<br/><button onclick="requestPlaylists('${peerId}')">Ver Playlists</button>`);
         peerMarkers.set(peerId, marker);
-        // Ao abrir novamente o popup, solicitar a listagem de playlists
+        
         marker.on('popupopen', () => {
           try {
             p2pService.sendTo(peerId, { type: 'request-playlists' });
           } catch (e) {
-            console.warn('[P2PView] Failed to request playlists on popupopen:', e);
+            console.warn('[P2PView] Error requesting playlists on popupopen:', e);
           }
         });
       }
       
-      // Atualizar lista de dispositivos
       updateDevicesList();
     };
 
@@ -590,15 +332,15 @@ export default defineComponent({
       if (!marker) return;
 
       let content = `<b>Playlists de ${peerId.substring(0, 8)}:</b><ul>`;
-      if (playlists.length === 0) {
+      if (!playlists || playlists.length === 0) {
         content += '<li>Nenhuma playlist encontrada.</li>';
       } else {
         playlists.forEach(p => {
           const countLabel = `${p.songCount} música${p.songCount !== 1 ? 's' : ''}`;
           if (p.songCount > 5) {
-            content += `<li>${p.name} (${countLabel}) <button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
+            content += `<li>${p.name} (${countLabel}) <button onclick="clonePlaylistAction('${peerId}', ${p.id})" style="font-size:11px; margin-right:4px;">Baixar todas</button><button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
           } else {
-            content += `<li>${p.name} (${countLabel}) <button onclick="clonePlaylistAction('${peerId}', ${p.id})" style="font-size:11px;">Baixar playlist</button> <button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
+            content += `<li>${p.name} (${countLabel}) <button onclick="clonePlaylistAction('${peerId}', ${p.id})" style="font-size:11px; margin-right:4px;">Baixar playlist</button> <button onclick="viewPlaylistSongs('${peerId}', ${p.id})" style="font-size:11px;">Ver músicas</button></li>`;
           }
         });
       }
@@ -629,231 +371,21 @@ export default defineComponent({
       if (totalPages > 1) {
         const prevDisabled = page <= 1 ? 'disabled' : '';
         const nextDisabled = page >= totalPages ? 'disabled' : '';
-        content += `<div style="margin-top:8px;">
+        content += `<div style="margin-top:8px; display:flex; justify-content:space-between;">
           <button ${prevDisabled} onclick="viewPlaylistSongsPage('${peerId}', ${playlistId}, ${page - 1})" style="font-size:11px;">◀️ Anterior</button>
           <button ${nextDisabled} onclick="viewPlaylistSongsPage('${peerId}', ${playlistId}, ${page + 1})" style="font-size:11px;">Próxima ▶️</button>
         </div>`;
       }
       marker.setPopupContent(content).openPopup();
     };
-    
-    const handleCloneRequest = async (peerId: string, playlistId: number) => {
-      try {
-        const playlist = await playlistService.getPlaylistWithSongs(playlistId);
-        if (!playlist || !playlist.songs.length) {
-          p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Playlist vazia ou não encontrada' } });
-          return;
-        }
-        
-        // Send metadata first
-        p2pService.sendTo(peerId, { 
-          type: 'clone-start', 
-          payload: { 
-            playlistName: playlist.name,
-            totalSongs: playlist.songs.length
-          } 
-        });
-        
-        // Send each song in chunks (16KB per chunk to stay safe)
-        const CHUNK_SIZE = 16 * 1024;
-        for (let i = 0; i < playlist.songs.length; i++) {
-          const song = playlist.songs[i];
-          let dataStr = '';
-          
-          if (song.data instanceof Blob) {
-            // Convert Blob to base64 for transport
-            dataStr = await new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.readAsDataURL(song.data as Blob);
-            });
-          } else {
-            dataStr = song.data;
-          }
 
-          const totalChunks = Math.ceil(dataStr.length / CHUNK_SIZE);
-          
-          // Send song metadata
-          p2pService.sendTo(peerId, {
-            type: 'clone-song-meta',
-            payload: {
-              songIndex: i,
-              title: song.title,
-              artist: song.artist,
-              album: song.album,
-              duration: song.duration,
-              playlistId: song.playlistId,
-              totalChunks
-            }
-          });
-          
-          // Send chunks
-          for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-            const start = chunkIndex * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, dataStr.length);
-            const chunk = dataStr.substring(start, end);
-            
-            p2pService.sendTo(peerId, {
-              type: 'clone-song-chunk',
-              payload: {
-                songIndex: i,
-                chunkIndex,
-                totalChunks,
-                data: chunk
-              }
-            });
-            
-            // Small delay between chunks to avoid overwhelming
-            await new Promise(resolve => setTimeout(resolve, 50));
-          }
-        }
-        
-        // Send completion
-        p2pService.sendTo(peerId, { 
-          type: 'clone-complete', 
-          payload: { playlistName: playlist.name } 
-        });
-        
-      } catch (error) {
-        console.error('[P2PView] Error handling clone request:', error);
-        p2pService.sendTo(peerId, { type: 'clone-error', payload: { message: 'Erro ao processar clonagem' } });
-      }
+    return { 
+      connectedPeersCount, 
+      connectedDevices, 
+      focusOnDevice, 
+      localDeviceType,
+      transferService 
     };
-    
-    const handleSongChunk = async (peerId: string, payload: any) => {
-      const { songIndex, chunkIndex, totalChunks, data } = payload;
-      const key = `${peerId}-${songIndex}`;
-      
-      // Update activity timestamp for timeout detector
-      lastActivityTime = Date.now();
-      
-      if (!songChunksBuffer.has(key)) {
-        // This shouldn't normally happen if metadata came first, but handle it gracefully
-        songChunksBuffer.set(key, { 
-          chunks: new Array(totalChunks), 
-          totalChunks, 
-          metadata: null,
-          receivedCount: 0
-        });
-      }
-      
-      const buffer = songChunksBuffer.get(key)!;
-      if (buffer.chunks[chunkIndex] === undefined) {
-        buffer.chunks[chunkIndex] = data;
-        buffer.receivedCount++;
-      }
-      
-      // Update progress visualization
-      if (cloneProgress.value.active && buffer.metadata) {
-        const songProgress = Math.round((buffer.receivedCount / totalChunks) * 100);
-        if (totalChunks > 20) {
-           cloneProgress.value.currentSong = `${buffer.metadata.title} (${songProgress}%)`;
-        }
-      }
-
-      // Check if all chunks received
-      if (buffer.receivedCount === totalChunks && buffer.metadata) {
-        if (buffer.processed) return;
-        buffer.processed = true;
-        
-        try {
-          const fullDataUrl = buffer.chunks.join('');
-          console.log(`[P2PView] 🛠️ Reconstructing: ${buffer.metadata.title} (${fullDataUrl.length} chars)`);
-          
-          // Optimized Base64 to Blob conversion (more robust than fetch for giant strings)
-          const parts = fullDataUrl.split(',');
-          const mime = parts[0].match(/:(.*?);/)?.[1] || buffer.metadata.mimeType || 'audio/mpeg';
-          const b64Data = parts[1];
-          
-          const sliceSize = 512;
-          const byteCharacters = atob(b64Data);
-          const byteArrays = [];
-
-          for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
-            const slice = byteCharacters.slice(offset, offset + sliceSize);
-            const byteNumbers = new Array(slice.length);
-            for (let i = 0; i < slice.length; i++) {
-              byteNumbers[i] = slice.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            byteArrays.push(byteArray);
-          }
-
-          const audioBlob = new Blob(byteArrays, { type: mime });
-          console.log(`[P2PView] 📦 Blob: ${audioBlob.size} bytes, ${audioBlob.type}`);
-
-          const song: Omit<Song, 'id'> = {
-            title: buffer.metadata.title,
-            artist: buffer.metadata.artist,
-            year: '',
-            img: '',
-            album: buffer.metadata.album,
-            duration: buffer.metadata.duration,
-            playlistId: cloneProgress.value.newPlaylistId, 
-            data: audioBlob
-          };
-          
-          await playlistService.addSong(song);
-          console.log('[P2PView] ✅ Saved to IndexedDB');
-          
-          cloneProgress.value.current++;
-          const newPercent = Math.round((cloneProgress.value.current / cloneProgress.value.total) * 100);
-          cloneProgress.value.percent = newPercent;
-          cloneProgress.value.currentSong = song.title;
-          
-          if (cloneProgress.value.current < cloneProgress.value.total) {
-            const elapsed = Date.now() - cloneProgress.value.startTime;
-            const avgTimePerSong = elapsed / cloneProgress.value.current;
-            const remaining = avgTimePerSong * (cloneProgress.value.total - cloneProgress.value.current);
-            cloneProgress.value.timeRemaining = formatTime(remaining);
-          } else {
-            cloneProgress.value.timeRemaining = 'Finalizando...';
-          }
-        } catch (err: any) {
-          console.error('[P2PView] ❌ Rebuild error:', err);
-          alert(`Falha ao salvar "${buffer.metadata.title}": ${err.message}`);
-        } finally {
-          songChunksBuffer.delete(key);
-        }
-      }
-    };
-    
-    const finalizeClone = async (peerId: string, payload: any) => {
-      // Aguardar um pouco para garantir que todos os chunks foram processados
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Contar quantas músicas realmente foram salvas na playlist
-      const songsInPlaylist = await playlistService.getSongsForPlaylist(cloneProgress.value.newPlaylistId);
-      const songsCloned = songsInPlaylist.length;
-      
-      console.log('[P2PView] ✅ Clone finalized:', songsCloned, 'songs actually saved');
-      cloneProgress.value.active = false;
-      
-      // Cleanup locks
-      releaseWakeLock();
-      stopStaleCheck();
-
-      alert(`Playlist "${payload.playlistName}" clonada com sucesso! ${songsCloned} música${songsCloned !== 1 ? 's' : ''} adicionada${songsCloned !== 1 ? 's' : ''}.`);
-      songChunksBuffer.clear();
-    };
-    
-    const formatTime = (ms: number): string => {
-      const seconds = Math.floor(ms / 1000);
-      if (seconds < 60) return `${seconds}s`;
-      const minutes = Math.floor(seconds / 60);
-      const secs = seconds % 60;
-      return `${minutes}m ${secs}s`;
-    };
-
-    const clonePlaylist = async (playlistData: any, fromPeerId: string) => {
-        const newName = `[clonado de: ${fromPeerId.substring(0, 8)}] ${playlistData.name}`;
-        // Ensure songs are present and correctly structured for creation
-        await playlistService.createPlaylistWithSongs(newName, playlistData.songs || []);
-        console.log(`Playlist "${newName}" clonada com sucesso!`);
-        alert(`Playlist "${newName}" clonada com sucesso! Volte para a tela do player para vê-la.`);
-    };
-
-    return { connectedPeersCount, cloneProgress, debugLogs, connectedDevices, focusOnDevice, localDeviceType };
   }
 });
 </script>
@@ -881,15 +413,24 @@ export default defineComponent({
   top: 15px;
   left: 15px;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.75);
   color: white;
-  border: none;
-  border-radius: 5px;
-  padding: 10px 15px;
-  font-size: 1em;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.95em;
+  font-weight: 500;
   cursor: pointer;
   text-decoration: none;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.back-to-player-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  transform: translateY(-1px);
 }
 
 .status-overlay {
@@ -898,9 +439,11 @@ export default defineComponent({
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
   color: #fca5a5;
-  padding: 8px 15px;
+  padding: 8px 16px;
   border-radius: 20px;
   font-size: 0.9em;
   pointer-events: none;
@@ -914,20 +457,21 @@ export default defineComponent({
 /* Lista de dispositivos */
 .devices-list {
   position: fixed;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(10px);
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   color: white;
   padding: 15px;
-  border-radius: 10px;
+  border-radius: 12px;
   z-index: 1000;
   max-height: 50vh;
   overflow-y: auto;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
 }
 
 .devices-list h4 {
   margin: 0 0 10px 0;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #86efac;
   text-transform: uppercase;
@@ -940,14 +484,14 @@ export default defineComponent({
   gap: 8px;
   padding: 8px 10px;
   margin: 5px 0;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .device-item:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
   transform: translateX(3px);
 }
 
@@ -974,131 +518,136 @@ export default defineComponent({
   text-overflow: ellipsis;
 }
 
-/* Desktop: lista na lateral direita */
 @media (min-width: 768px) {
   .devices-list {
     top: 80px;
     right: 15px;
     min-width: 200px;
-    max-width: 250px;
+    max-width: 260px;
   }
 }
 
-/* Mobile: lista no rodapé */
 @media (max-width: 767px) {
   .devices-list {
-    bottom: 15px;
+    bottom: 80px;
     left: 15px;
     right: 15px;
-    max-height: 35vh;
+    max-height: 30vh;
     padding: 10px;
     -webkit-overflow-scrolling: touch;
   }
-  
-  .devices-list h4 {
-    font-size: 12px;
-    margin-bottom: 8px;
-  }
-  
-  .device-item {
-    padding: 6px 8px;
-    font-size: 12px;
-  }
-  
-  .device-icon-small {
-    font-size: 16px;
-  }
-  
-  .device-name {
-    font-size: 11px;
-  }
 }
 
+/* Modal Overlay */
 .clone-overlay {
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0, 0, 0, 0.85);
-  z-index: 2000;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  z-index: 9000;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
 .clone-progress-card {
-  background: white;
-  padding: 30px;
-  border-radius: 15px;
-  min-width: 300px;
-  max-width: 400px;
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: white;
+  padding: 26px 24px;
+  border-radius: 18px;
+  width: 100%;
+  max-width: 380px;
   text-align: center;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.6);
+  animation: card-appear 0.25s ease-out;
+}
+
+@keyframes card-appear {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .clone-progress-card h3 {
-  margin: 0 0 15px 0;
-  color: #333;
+  margin: 0 0 8px 0;
+  font-size: 1.3em;
+  color: #60a5fa;
 }
 
-.clone-progress-card p {
-  margin: 10px 0;
-  color: #666;
+.playlist-title {
+  font-size: 1.1em;
+  margin: 4px 0 16px 0;
+  color: #f1f5f9;
+  word-break: break-word;
 }
 
 .progress-bar {
   width: 100%;
-  height: 20px;
-  background: #e0e0e0;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 10px;
   overflow: hidden;
-  margin: 15px 0;
+  margin: 14px 0;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #4CAF50, #45a049);
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
   transition: width 0.3s ease;
 }
 
+.progress-stats {
+  font-size: 13px;
+  color: #cbd5e1;
+  margin: 8px 0;
+}
+
 .current-song {
-  font-weight: bold;
-  color: #333 !important;
-  font-size: 14px;
-  margin: 15px 0 !important;
-}
-
-.time-estimate {
-  font-size: 12px;
-  color: #999 !important;
-}
-
-.debug-overlay {
-  position: fixed;
-  bottom: 60px;
-  left: 10px;
-  right: 10px;
-  background: rgba(0, 0, 0, 0.85);
-  color: #0f0;
-  padding: 10px;
-  border-radius: 8px;
-  font-family: monospace;
-  font-size: 11px;
-  max-height: 200px;
-  overflow-y: auto;
-  z-index: 1500;
-  pointer-events: none;
-}
-
-.debug-log {
-  margin: 2px 0;
+  font-weight: 600;
+  color: #38bdf8;
+  font-size: 13px;
+  margin: 12px 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Limit leaflet popup height on mobile and enable touch scrolling */
+.transfer-footer {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.time-estimate {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.cancel-transfer-btn {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-transfer-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
 .leaflet-popup-content {
   max-height: 55vh;
   overflow-y: auto;
