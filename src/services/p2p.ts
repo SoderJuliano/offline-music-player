@@ -26,24 +26,21 @@ class P2PService {
       console.log('[P2P] Already initialized');
       return;
     }
+    if (!ABLY_API_KEY) {
+      const error = new Error("❌ Chave da API do Ably não configurada. Configure VITE_ABLY_API_KEY no arquivo .env");
+      console.error('[P2P]', error.message);
+      if (this.onError) this.onError(error);
+      return;
+    }
+    console.log('[P2P] API Key found, connecting...');
 
     try {
       console.log('[P2P] Creating Ably client with ID:', this.localId);
-      
-      const clientOptions: Ably.ClientOptions = {
+      this.ably = new Ably.Realtime({
+        key: ABLY_API_KEY,
         clientId: this.localId,
         autoConnect: true,
-      };
-
-      if (ABLY_API_KEY) {
-        console.log('[P2P] Using build-time Ably API Key');
-        clientOptions.key = ABLY_API_KEY;
-      } else {
-        console.log('[P2P] No build-time API key; using Netlify Function auth endpoint (/.netlify/functions/ably-auth)');
-        clientOptions.authUrl = '/.netlify/functions/ably-auth';
-      }
-
-      this.ably = new Ably.Realtime(clientOptions);
+      });
       
       // Log de estado da conexão Ably
       this.ably.connection.on('connected', () => {
